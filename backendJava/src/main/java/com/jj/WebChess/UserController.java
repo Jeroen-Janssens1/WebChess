@@ -12,7 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/")
+@RequestMapping("/api")
 public class UserController {
 
     private final UserRepository userRepository;
@@ -31,7 +31,7 @@ public class UserController {
             .orElseThrow(() -> new SecurityException("User not found"));
     }
 
-    @GetMapping("user")
+    @GetMapping("/user")
     public ResponseEntity<Object> getCurrentUserInfo() {
         try {
             UserEntity user = getCurrentUser();
@@ -41,7 +41,7 @@ public class UserController {
         }
     }
 
-    @DeleteMapping("user")
+    @DeleteMapping("/user")
     public ResponseEntity<Object> deleteCurrentUser() {
         try {
             UserEntity user = getCurrentUser();

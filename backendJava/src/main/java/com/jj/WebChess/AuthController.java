@@ -22,7 +22,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 
 @RestController
-@RequestMapping("/")
+@RequestMapping("/api")
 public class AuthController {
 
     private final SecurityContextRepository securityContextRepository;
@@ -41,7 +41,7 @@ public class AuthController {
         this.securityContextRepository = securityContextRepository;
     }
 
-    @PostMapping("login")
+    @PostMapping("/login")
     public ResponseEntity<Map<String, Object>> login(@RequestBody Map<String, String> request, HttpServletRequest httpRequest, HttpServletResponse httpResponse) {
         String username = request.get("username");
         String password = request.get("password");
@@ -76,7 +76,7 @@ public class AuthController {
         }
     }
 
-    @PostMapping("register")
+    @PostMapping("/register")
     public ResponseEntity<Map<String, Object>> register(@RequestBody Map<String, String> request) {
         String username = request.get("username");
         String password = request.get("password");
@@ -103,7 +103,7 @@ public class AuthController {
             ));
     }
 
-    @PostMapping("logout")
+    @PostMapping("/logout")
     public ResponseEntity<Map<String, String>> logout(HttpServletRequest request) {
         HttpSession session = request.getSession(false);
         if(session != null){
