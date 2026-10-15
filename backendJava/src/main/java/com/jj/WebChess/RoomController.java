@@ -36,6 +36,12 @@ public class RoomController {
         return roomService.join(principal.getName(), request.roomIdOrName(), request.password());
     }
 
+    @PostMapping("/{roomId}/games")
+    public ResponseEntity<GameService.GameState> startGame(
+            @PathVariable String roomId, Principal principal) {
+        return ResponseEntity.status(201).body(roomService.startGame(roomId, principal.getName()));
+    }
+
     @DeleteMapping("/{roomId}/members/me")
     public Map<String, Object> leaveRoom(@PathVariable String roomId, Principal principal) {
         boolean roomClosed = roomService.leave(roomId, principal.getName());

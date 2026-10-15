@@ -23,9 +23,11 @@ public class RoomService {
     private final Map<String, Room> rooms = new LinkedHashMap<>();
     private final Map<String, List<Subscription>> subscriptions = new HashMap<>();
     private final PasswordEncoder passwordEncoder;
+    private final GameService gameService;
 
-    public RoomService(PasswordEncoder passwordEncoder) {
+    public RoomService(PasswordEncoder passwordEncoder, GameService gameService) {
         this.passwordEncoder = passwordEncoder;
+        this.gameService = gameService;
     }
 
     public synchronized RoomView create(String username, String name, String password) {
@@ -62,6 +64,9 @@ public class RoomService {
         if (room.members.contains(username)) {
             return room.toView();
         }
+        if (room.gameId != null) {
+            throw new RoomException(HttpStatus.CONFLICT, "A game has already started in this room");
+        }
         if (room.passwordHash != null
                 && (password == null || !passwordEncoder.matches(password, room.passwordHash))) {
             throw new RoomException(HttpStatus.FORBIDDEN, "Incorrect room password");
@@ -73,6 +78,28 @@ public class RoomService {
         room.members.add(username);
         notifyRoomUpdated(room, username);
         return room.toView();
+    }
+
+    public synchronized GameService.GameState startGame(String roomId, String username) {
+        Room room = rooms.get(roomId);
+        if (room == null) {
+            throw new RoomException(HttpStatus.NOT_FOUND, "Room not found");
+        }
+        if (!room.creator.equals(username)) {
+            throw new RoomException(HttpStatus.FORBIDDEN, "Only the room host can start a game");
+        }
+        if (room.members.size() != ROOM_CAPACITY) {
+            throw new RoomException(HttpStatus.CONFLICT, "A game can only start with two players");
+        }
+        if (room.gameId != null) {
+            throw new RoomException(HttpStatus.CONFLICT, "A game has already started in this room");
+        }
+
+        List<String> players = List.copyOf(room.members);
+        GameService.GameState gameState = gameService.startRoomGame(roomId, players);
+        room.gameId = gameState.gameId();
+        notifyRoomUpdated(room, null);
+        return gameState;
     }
 
     public synchronized boolean leave(String roomId, String username) {
@@ -170,7 +197,9 @@ public class RoomService {
         }
     }
 
-    public record RoomView(String id, String name, String creator, List<String> users, boolean passwordProtected) {}
+    public record RoomView(
+            String id, String name, String creator, List<String> users,
+            boolean passwordProtected, String gameId) {}
 
     public static class RoomException extends RuntimeException {
         private final HttpStatus status;
@@ -191,6 +220,7 @@ public class RoomService {
         private final String creator;
         private final String passwordHash;
         private final Set<String> members = new LinkedHashSet<>();
+        private String gameId;
 
         private Room(String id, String name, String creator, String passwordHash) {
             this.id = id;
@@ -200,7 +230,7 @@ public class RoomService {
         }
 
         private RoomView toView() {
-            return new RoomView(id, name, creator, List.copyOf(members), passwordHash != null);
+            return new RoomView(id, name, creator, List.copyOf(members), passwordHash != null, gameId);
         }
     }
 
