@@ -1,7 +1,9 @@
 package com.jj.WebChess;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 final class ChessGame {
 
@@ -27,6 +29,12 @@ final class ChessGame {
     private boolean blackQueenSideCastle = true;
     private int enPassantRow = -1;
     private int enPassantColumn = -1;
+    private String status = "IN_PROGRESS";
+    private String winner;
+    private String winnerColor;
+    private String termination;
+    private final Set<String> rematchRequests = new LinkedHashSet<>();
+    private String rematchGameId;
 
     ChessGame(String gameId, String roomId, List<String> players, String whitePlayer) {
         this.gameId = gameId;
@@ -46,11 +54,16 @@ final class ChessGame {
         }
         return new GameService.GameState(
             gameId, roomId, players, whitePlayer, List.copyOf(boardView), whiteToMove,
-            List.copyOf(previousTurns));
+            List.copyOf(previousTurns), status, winner, winnerColor, termination,
+            List.copyOf(rematchRequests), rematchGameId);
     }
 
     String gameId() {
         return gameId;
+    }
+
+    String roomId() {
+        return roomId;
     }
 
     List<String> players() {
@@ -88,6 +101,9 @@ final class ChessGame {
     }
 
     MoveOutcome move(String from, String to, String promotion) {
+        if (!status.equals("IN_PROGRESS")) {
+            return new MoveOutcome(false, state());
+        }
         int[] source = parseSquare(from);
         int[] destination = parseSquare(to);
         Character promotionPiece = parsePromotion(promotion);
@@ -131,11 +147,57 @@ final class ChessGame {
         whiteToMove = !whiteToMove;
 
         boolean opponentInCheck = isKingInCheck(board, whiteToMove);
+        List<Move> opponentMoves = legalMoves(whiteToMove);
         if (opponentInCheck) {
-            notation += legalMoves(whiteToMove).isEmpty() ? "#" : "+";
+            notation += opponentMoves.isEmpty() ? "#" : "+";
+        }
+        if (opponentMoves.isEmpty()) {
+            status = "FINISHED";
+            if (opponentInCheck) {
+                termination = "CHECKMATE";
+                winnerColor = whiteToMove ? "BLACK" : "WHITE";
+                winner = whiteToMove ? blackPlayer() : whitePlayer();
+            } else {
+                termination = "STALEMATE";
+            }
         }
         previousTurns.add(notation);
         return new MoveOutcome(true, state());
+    }
+
+    boolean forfeit(String username) {
+        if (!status.equals("IN_PROGRESS") || !players.contains(username)) {
+            return false;
+        }
+        status = "FINISHED";
+        termination = "FORFEIT";
+        if (players.size() == 1) {
+            winnerColor = whiteToMove ? "BLACK" : "WHITE";
+            winner = username;
+        } else if (username.equals(whitePlayer)) {
+            winnerColor = "BLACK";
+            winner = blackPlayer();
+        } else {
+            winnerColor = "WHITE";
+            winner = whitePlayer;
+        }
+        return true;
+    }
+
+    boolean requestRematch(String username) {
+        return players.contains(username) && rematchRequests.add(username);
+    }
+
+    boolean allPlayersRequestedRematch() {
+        return rematchRequests.containsAll(players);
+    }
+
+    void setRematchGameId(String rematchGameId) {
+        this.rematchGameId = rematchGameId;
+    }
+
+    String rematchGameId() {
+        return rematchGameId;
     }
 
     private List<Move> legalMoves(boolean white) {

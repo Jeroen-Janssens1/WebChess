@@ -50,6 +50,16 @@ public class GameController {
             gameId, principal.getName(), request.from(), request.to(), request.promotion());
     }
 
+    @PostMapping("/{gameId}/forfeit")
+    public GameService.GameState forfeit(@PathVariable String gameId, Principal principal) {
+        return gameService.forfeit(gameId, principal.getName());
+    }
+
+    @PostMapping("/{gameId}/rematch")
+    public GameService.RematchResult requestRematch(@PathVariable String gameId, Principal principal) {
+        return gameService.requestRematch(gameId, principal.getName());
+    }
+
     @GetMapping(value = "/{gameId}/events", produces = "text/event-stream")
     public SseEmitter subscribe(@PathVariable String gameId, Principal principal) {
         return gameService.subscribe(gameId, principal.getName());

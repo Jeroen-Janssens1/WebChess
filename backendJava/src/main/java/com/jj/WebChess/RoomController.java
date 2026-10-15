@@ -31,6 +31,11 @@ public class RoomController {
             .body(roomService.create(principal.getName(), request.name(), request.password()));
     }
 
+    @GetMapping
+    public java.util.List<RoomService.RoomView> getRooms() {
+        return roomService.getRooms();
+    }
+
     @PostMapping("/join")
     public RoomService.RoomView joinRoom(@RequestBody JoinRoomRequest request, Principal principal) {
         return roomService.join(principal.getName(), request.roomIdOrName(), request.password());

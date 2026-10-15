@@ -107,6 +107,74 @@ class RoomServiceTests {
     }
 
     @Test
+    void forfeitEndsGameAndPreventsFurtherMoves() {
+        StartedGame game = startedGame("forfeit game");
+        String forfeitingPlayer = game.state().whitePlayer();
+
+        GameService.GameState ended = gameService.forfeit(game.state().gameId(), forfeitingPlayer);
+        String expectedWinner = game.state().players().stream()
+            .filter(player -> !player.equals(forfeitingPlayer))
+            .findFirst()
+            .orElseThrow();
+
+        assertEquals("FINISHED", ended.status());
+        assertEquals("FORFEIT", ended.termination());
+        assertEquals(expectedWinner, ended.winner());
+        GameService.GameException rejectedMove = assertThrows(GameService.GameException.class,
+            () -> gameService.movePiece(game.state().gameId(), ended.winner(), "e7", "e5", null));
+        assertEquals(HttpStatus.CONFLICT, rejectedMove.getStatus());
+    }
+
+    @Test
+    void rematchStartsAfterBothPlayersRequestIt() {
+        StartedGame game = startedGame("rematch game");
+        gameService.forfeit(game.state().gameId(), game.state().whitePlayer());
+        String firstPlayer = game.state().players().get(0);
+        String secondPlayer = game.state().players().get(1);
+
+        GameService.RematchResult waiting = gameService.requestRematch(game.state().gameId(), firstPlayer);
+        assertFalse(waiting.started());
+        assertEquals(List.of(firstPlayer), waiting.gameState().rematchRequests());
+
+        GameService.RematchResult started = gameService.requestRematch(game.state().gameId(), secondPlayer);
+        assertTrue(started.started());
+        assertNotNull(started.gameState().gameId());
+        assertEquals(game.roomId(), started.gameState().roomId());
+        assertEquals(game.state().players(), started.gameState().players());
+        assertEquals("IN_PROGRESS", started.gameState().status());
+    }
+
+    @Test
+    void localPlayerCanImmediatelyStartARematch() {
+        GameService.GameState game = gameService.startLocalGame("alice");
+        gameService.forfeit(game.gameId(), "alice");
+
+        GameService.RematchResult rematch = gameService.requestRematch(game.gameId(), "alice");
+
+        assertTrue(rematch.started());
+        assertNotNull(rematch.gameState().gameId());
+        assertFalse(game.gameId().equals(rematch.gameState().gameId()));
+        assertEquals("", rematch.gameState().roomId());
+        assertEquals("IN_PROGRESS", rematch.gameState().status());
+    }
+
+    @Test
+    void checkmateFinishesTheGameWithTheCorrectWinner() {
+        StartedGame game = startedGame("checkmate game");
+        GameService.GameState state = game.state();
+        state = playMove(state, "e2", "e3");
+        state = playMove(state, "f7", "f6");
+        state = playMove(state, "d2", "d4");
+        state = playMove(state, "g7", "g5");
+        state = playMove(state, "d1", "h5");
+
+        assertEquals("FINISHED", state.status());
+        assertEquals("CHECKMATE", state.termination());
+        assertTrue(state.previousTurns().get(4).endsWith("#"));
+        assertEquals(state.whitePlayer(), state.winner());
+    }
+
+    @Test
     void roomGameContinuesAfterItsRoomIsClosed() {
         StartedGame game = startedGame("independent game");
 

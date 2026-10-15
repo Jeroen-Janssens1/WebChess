@@ -51,6 +51,9 @@ public class GameService {
     public synchronized MoveResult movePiece(
             String gameId, String username, String from, String to, String promotion) {
         ChessGame game = getAuthorizedGame(gameId, username);
+        if (!game.state().status().equals("IN_PROGRESS")) {
+            throw new GameException(HttpStatus.CONFLICT, "The game has already ended");
+        }
         boolean playerHasTurn = game.whiteToMove()
             ? game.whitePlayer().equals(username)
             : game.blackPlayer().equals(username);
@@ -68,6 +71,41 @@ public class GameService {
             notifyGameEvent(gameId, "game_updated", outcome.state());
         }
         return new MoveResult(outcome.moved(), outcome.state());
+    }
+
+    public synchronized GameState forfeit(String gameId, String username) {
+        ChessGame game = getAuthorizedGame(gameId, username);
+        if (game.forfeit(username)) {
+            notifyGameEvent(gameId, "game_ended", game.state());
+        }
+        return game.state();
+    }
+
+    public synchronized RematchResult requestRematch(String gameId, String username) {
+        ChessGame game = getAuthorizedGame(gameId, username);
+        if (!game.state().status().equals("FINISHED")) {
+            throw new GameException(HttpStatus.CONFLICT, "A rematch is only available after the game ends");
+        }
+        if (game.rematchGameId() != null) {
+            return new RematchResult(true, getAuthorizedGame(game.rematchGameId(), username).state());
+        }
+
+        game.requestRematch(username);
+        if (game.allPlayersRequestedRematch()) {
+            List<String> players = game.players();
+            String whitePlayer = players.size() == 1
+                ? players.get(0)
+                : java.util.concurrent.ThreadLocalRandom.current().nextBoolean()
+                    ? players.get(0)
+                    : players.get(1);
+            GameState rematch = startGame(game.roomId(), players, whitePlayer);
+            game.setRematchGameId(rematch.gameId());
+            notifyGameEvent(gameId, "rematch_started", rematch);
+            return new RematchResult(true, rematch);
+        }
+
+        notifyGameEvent(gameId, "rematch_requested", game.state());
+        return new RematchResult(false, game.state());
     }
 
     public synchronized SseEmitter subscribe(String gameId, String username) {
@@ -126,6 +164,8 @@ public class GameService {
 
     public record MoveResult(boolean moved, GameState gameState) {}
 
+    public record RematchResult(boolean started, GameState gameState) {}
+
     public record GameState(
             String gameId,
             String roomId,
@@ -133,7 +173,13 @@ public class GameService {
             String whitePlayer,
             List<List<String>> board,
             boolean whiteToMove,
-            List<String> previousTurns) {}
+            List<String> previousTurns,
+            String status,
+            String winner,
+            String winnerColor,
+            String termination,
+            List<String> rematchRequests,
+            String rematchGameId) {}
 
     public static class GameException extends RuntimeException {
         private final HttpStatus status;

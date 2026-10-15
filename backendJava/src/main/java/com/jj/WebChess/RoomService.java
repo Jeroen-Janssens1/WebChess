@@ -48,6 +48,10 @@ public class RoomService {
         return room.toView();
     }
 
+    public synchronized List<RoomView> getRooms() {
+        return rooms.values().stream().map(Room::toView).toList();
+    }
+
     public synchronized RoomView join(String username, String roomIdOrName, String password) {
         if (roomIdOrName == null || roomIdOrName.isBlank()) {
             throw new RoomException(HttpStatus.BAD_REQUEST, "Room name or id is required");
