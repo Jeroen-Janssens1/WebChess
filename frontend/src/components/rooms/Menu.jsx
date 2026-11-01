@@ -1,4 +1,4 @@
-function Menu({ user, busy, onLocal, onCreate, onJoin, onLogout }) {
+function Menu({ user, busy, onLocal, onCreate, onJoin, onHistory, onLogout }) {
   return (
     <div className="page-frame">
       <header className="topbar">
@@ -17,6 +17,7 @@ function Menu({ user, busy, onLocal, onCreate, onJoin, onLogout }) {
           </button>
           <button className="menu-action" onClick={onCreate}><span className="menu-action-icon">＋</span><span><strong>Create Room</strong><small>Set up a private table for a friend.</small></span><b>↗</b></button>
           <button className="menu-action" onClick={onJoin}><span className="menu-action-icon">⌕</span><span><strong>Join Room</strong><small>Find an open table and play.</small></span><b>↗</b></button>
+          <button className="menu-action" onClick={onHistory}><span className="menu-action-icon">◷</span><span><strong>Game History</strong><small>Review your completed games.</small></span><b>↗</b></button>
           <button className="logout-link" onClick={onLogout} disabled={busy}>Log out <span>↗</span></button>
         </nav>
         <div className="menu-side-note"><span>♔</span><p>“Every chess master was once a beginner.”</p><small>— Irving Chernev</small></div>

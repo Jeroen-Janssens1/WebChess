@@ -1,13 +1,16 @@
 package com.jj.WebChess;
 
 import java.security.Principal;
+import java.time.LocalDate;
 import java.util.Map;
 
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -19,10 +22,32 @@ public class GameController {
 
     private final GameService gameService;
     private final RoomService roomService;
+    private final GameHistoryService gameHistoryService;
 
-    public GameController(GameService gameService, RoomService roomService) {
+    public GameController(
+            GameService gameService, RoomService roomService, GameHistoryService gameHistoryService) {
         this.gameService = gameService;
         this.roomService = roomService;
+        this.gameHistoryService = gameHistoryService;
+    }
+
+    @GetMapping("/history")
+    public GameHistoryService.HistoryPage getGameHistory(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(required = false) String playerName,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) String condition,
+            @RequestParam(required = false) String color,
+            Principal principal) {
+        return gameHistoryService.getHistory(
+            principal.getName(), page, playerName, from, to, condition, color);
+    }
+
+    @GetMapping("/history/{gameId}")
+    public GameHistoryService.ReplayView getGameReplay(
+            @PathVariable String gameId, Principal principal) {
+        return gameHistoryService.getReplay(principal.getName(), gameId);
     }
 
     @PostMapping
@@ -69,6 +94,13 @@ public class GameController {
 
     @ExceptionHandler(GameService.GameException.class)
     public ResponseEntity<Map<String, String>> handleGameException(GameService.GameException exception) {
+        return ResponseEntity.status(exception.getStatus())
+            .body(Map.of("error", exception.getMessage()));
+    }
+
+    @ExceptionHandler(GameHistoryService.HistoryException.class)
+    public ResponseEntity<Map<String, String>> handleHistoryException(
+            GameHistoryService.HistoryException exception) {
         return ResponseEntity.status(exception.getStatus())
             .body(Map.of("error", exception.getMessage()));
     }

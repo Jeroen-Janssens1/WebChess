@@ -11,10 +11,11 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import static org.mockito.Mockito.mock;
 
 class RoomServiceTests {
 
-    private final GameService gameService = new GameService();
+    private final GameService gameService = new GameService(mock(GameHistoryRepository.class));
     private final RoomService roomService = new RoomService(new BCryptPasswordEncoder(), gameService);
 
     @Test

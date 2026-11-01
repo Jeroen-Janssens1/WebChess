@@ -4,6 +4,7 @@ import AuthModal from './components/modals/AuthModal.jsx';
 import CreateRoomModal from './components/modals/CreateRoomModal.jsx';
 import JoinRoomModal from './components/modals/JoinRoomModal.jsx';
 import GameScreen from './components/game/GameScreen.jsx';
+import GameHistory from './components/game/GameHistory.jsx';
 import Menu from './components/rooms/Menu.jsx';
 import RoomLobby from './components/rooms/RoomLobby.jsx';
 import RoomSearch from './components/rooms/RoomSearch.jsx';
@@ -64,8 +65,9 @@ function App() {
       {screen === 'menu' && (
         <Menu user={user} busy={busy} onLocal={openLocalGame}
           onCreate={() => setModal({ type: 'create-room' })}
-          onJoin={() => setScreen('rooms')} onLogout={logout} />
+          onJoin={() => setScreen('rooms')} onHistory={() => setScreen('history')} onLogout={logout} />
       )}
+      {screen === 'history' && <GameHistory user={user} onBack={() => setScreen('menu')} />}
       {screen === 'rooms' && (
         <RoomSearch rooms={rooms} busy={busy} onBack={() => setScreen('menu')}
           onJoin={(selected) => selected.passwordProtected

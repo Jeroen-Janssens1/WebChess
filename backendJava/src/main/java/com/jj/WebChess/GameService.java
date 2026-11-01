@@ -1,11 +1,15 @@
 package com.jj.WebChess;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import org.springframework.http.HttpStatus;
@@ -17,6 +21,12 @@ public class GameService {
 
     private final Map<String, ChessGame> games = new LinkedHashMap<>();
     private final Map<String, List<Subscription>> subscriptions = new HashMap<>();
+    private final Set<String> persistedGames = new HashSet<>();
+    private final GameHistoryRepository gameHistoryRepository;
+
+    public GameService(GameHistoryRepository gameHistoryRepository) {
+        this.gameHistoryRepository = gameHistoryRepository;
+    }
 
     public synchronized GameState startLocalGame(String username) {
         return startGame("", List.of(username), username);
@@ -33,7 +43,9 @@ public class GameService {
     }
 
     private GameState startGame(String roomId, List<String> players, String whitePlayer) {
-        ChessGame game = new ChessGame(UUID.randomUUID().toString(), roomId, players, whitePlayer);
+        LocalDateTime startedAt = LocalDateTime.now().withSecond(0).withNano(0);
+        ChessGame game = new ChessGame(
+            UUID.randomUUID().toString(), roomId, players, whitePlayer, startedAt);
         games.put(game.gameId(), game);
         return game.state();
     }
@@ -91,17 +103,75 @@ public class GameService {
             throw new GameException(HttpStatus.BAD_REQUEST, exception.getMessage());
         }
         if (outcome.moved()) {
-            notifyGameEvent(gameId, "game_updated", outcome.state());
+            if (outcome.state().status().equals("FINISHED")) {
+                persistCompletedGame(game);
+                notifyGameEvent(gameId, "game_ended", outcome.state());
+            } else {
+                notifyGameEvent(gameId, "game_updated", outcome.state());
+            }
         }
         return new MoveResult(outcome.moved(), outcome.state());
     }
 
     public synchronized GameState forfeit(String gameId, String username) {
         ChessGame game = getAuthorizedGame(gameId, username);
-        if (game.forfeit(username)) {
+        boolean newlyEnded = game.forfeit(username);
+        if (game.state().status().equals("FINISHED")) {
+            persistCompletedGame(game);
+        }
+        if (newlyEnded) {
             notifyGameEvent(gameId, "game_ended", game.state());
         }
         return game.state();
+    }
+
+    private void persistCompletedGame(ChessGame game) {
+        if (persistedGames.contains(game.gameId())) {
+            return;
+        }
+
+        GameState state = game.state();
+        String result = state.winnerColor() == null ? "1/2-1/2"
+            : state.winnerColor().equals("WHITE") ? "1-0" : "0-1";
+        LocalDateTime playedAt = game.startedAt();
+        String pgn = toPgn(game, state, result, playedAt);
+        gameHistoryRepository.save(new GameHistoryEntity(
+            game.gameId(), game.whitePlayer(), game.blackPlayer(), result, playedAt, pgn));
+        persistedGames.add(game.gameId());
+    }
+
+    private String toPgn(ChessGame game, GameState state, String result, LocalDateTime playedAt) {
+        StringBuilder pgn = new StringBuilder();
+        appendPgnTag(pgn, "Event", "WebChess");
+        appendPgnTag(pgn, "Site", "WebChess");
+        appendPgnTag(pgn, "Date", playedAt.format(DateTimeFormatter.ofPattern("yyyy.MM.dd")));
+        appendPgnTag(pgn, "Round", "-");
+        appendPgnTag(pgn, "White", game.whitePlayer());
+        appendPgnTag(pgn, "Black", game.blackPlayer());
+        appendPgnTag(pgn, "Result", result);
+        appendPgnTag(pgn, "Termination", state.termination());
+        pgn.append('\n');
+
+        List<String> turns = state.previousTurns();
+        for (int index = 0; index < turns.size(); index += 2) {
+            if (index > 0) {
+                pgn.append(' ');
+            }
+            pgn.append(index / 2 + 1).append(". ").append(turns.get(index));
+            if (index + 1 < turns.size()) {
+                pgn.append(' ').append(turns.get(index + 1));
+            }
+        }
+        if (!turns.isEmpty()) {
+            pgn.append(' ');
+        }
+        return pgn.append(result).toString();
+    }
+
+    private void appendPgnTag(StringBuilder pgn, String name, String value) {
+        pgn.append('[').append(name).append(" \"")
+            .append(value.replace("\\", "\\\\").replace("\"", "\\\""))
+            .append("\"]\n");
     }
 
     public synchronized RematchResult requestRematch(String gameId, String username) {

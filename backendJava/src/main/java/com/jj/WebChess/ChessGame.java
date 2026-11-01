@@ -1,16 +1,22 @@
 package com.jj.WebChess;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 final class ChessGame {
+    private static final Pattern SAN_MOVE = Pattern.compile(
+        "^([KQRBN])?([a-h]?[1-8]?)(x?)([a-h][1-8])(?:=([QRBN]))?$");
 
     private final String gameId;
     private final String roomId;
     private final List<String> players;
     private final String whitePlayer;
+    private final LocalDateTime startedAt;
     private final char[][] board = {
         {'r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'},
         {'p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'},
@@ -36,11 +42,14 @@ final class ChessGame {
     private final Set<String> rematchRequests = new LinkedHashSet<>();
     private String rematchGameId;
 
-    ChessGame(String gameId, String roomId, List<String> players, String whitePlayer) {
+    ChessGame(
+            String gameId, String roomId, List<String> players, String whitePlayer,
+            LocalDateTime startedAt) {
         this.gameId = gameId;
         this.roomId = roomId;
         this.players = List.copyOf(players);
         this.whitePlayer = whitePlayer;
+        this.startedAt = startedAt;
     }
 
     GameService.GameState state() {
@@ -72,6 +81,10 @@ final class ChessGame {
 
     String whitePlayer() {
         return whitePlayer;
+    }
+
+    LocalDateTime startedAt() {
+        return startedAt;
     }
 
     String blackPlayer() {
@@ -163,6 +176,95 @@ final class ChessGame {
         }
         previousTurns.add(notation);
         return new MoveOutcome(true, state());
+    }
+
+    GameService.GameState replaySan(String san) {
+        String notation = san.replaceAll("[+#?!]+$", "");
+        if (notation.equals("O-O") || notation.equals("O-O-O")) {
+            int row = whiteToMove ? 7 : 0;
+            String destination = notation.equals("O-O") ? "g" : "c";
+            MoveOutcome outcome = move(toSquare(row, 4), destination + (8 - row), null);
+            if (!outcome.moved()) {
+                throw new IllegalArgumentException("PGN castling move cannot be replayed: " + san);
+            }
+            return outcome.state();
+        }
+
+        Matcher matcher = SAN_MOVE.matcher(notation);
+        if (!matcher.matches()) {
+            throw new IllegalArgumentException("Invalid PGN move: " + san);
+        }
+        char pieceType = matcher.group(1) == null ? 'P' : matcher.group(1).charAt(0);
+        String disambiguation = matcher.group(2);
+        boolean capture = !matcher.group(3).isEmpty();
+        String destination = matcher.group(4);
+        String promotion = matcher.group(5);
+        int[] target = parseSquare(destination);
+
+        for (Move candidate : legalMoves(whiteToMove)) {
+            char piece = board[candidate.fromRow][candidate.fromColumn];
+            if (Character.toUpperCase(piece) != pieceType
+                    || candidate.toRow != target[0] || candidate.toColumn != target[1]) {
+                continue;
+            }
+            String source = toSquare(candidate.fromRow, candidate.fromColumn);
+            if (!matchesDisambiguation(source, disambiguation)) {
+                continue;
+            }
+            boolean isCapture = board[candidate.toRow][candidate.toColumn] != '.'
+                || (pieceType == 'P' && candidate.fromColumn != candidate.toColumn);
+            if (capture != isCapture) {
+                continue;
+            }
+
+            ChessGame candidateGame = copyForReplay();
+            MoveOutcome candidateOutcome = candidateGame.move(
+                source, destination, promotion == null ? null : promotion.toLowerCase());
+            GameService.GameState result = candidateOutcome.state();
+            if (candidateOutcome.moved() && !result.previousTurns().isEmpty()
+                    && result.previousTurns().get(result.previousTurns().size() - 1)
+                        .replaceAll("[+#]+$", "").equals(notation)) {
+                MoveOutcome outcome = move(
+                    source, destination, promotion == null ? null : promotion.toLowerCase());
+                return outcome.state();
+            }
+        }
+        throw new IllegalArgumentException("PGN move cannot be replayed: " + san);
+    }
+
+    private boolean matchesDisambiguation(String source, String disambiguation) {
+        if (disambiguation.isEmpty()) {
+            return true;
+        }
+        if (disambiguation.length() == 2) {
+            return source.equals(disambiguation);
+        }
+        char marker = disambiguation.charAt(0);
+        return marker >= 'a' && marker <= 'h'
+            ? source.charAt(0) == marker
+            : source.charAt(1) == marker;
+    }
+
+    private ChessGame copyForReplay() {
+        ChessGame copy = new ChessGame(gameId, roomId, players, whitePlayer, startedAt);
+        for (int row = 0; row < board.length; row++) {
+            System.arraycopy(board[row], 0, copy.board[row], 0, board[row].length);
+        }
+        copy.previousTurns.addAll(previousTurns);
+        copy.whiteToMove = whiteToMove;
+        copy.whiteKingSideCastle = whiteKingSideCastle;
+        copy.whiteQueenSideCastle = whiteQueenSideCastle;
+        copy.blackKingSideCastle = blackKingSideCastle;
+        copy.blackQueenSideCastle = blackQueenSideCastle;
+        copy.enPassantRow = enPassantRow;
+        copy.enPassantColumn = enPassantColumn;
+        copy.status = status;
+        copy.winner = winner;
+        copy.winnerColor = winnerColor;
+        copy.termination = termination;
+        copy.rematchRequests.addAll(rematchRequests);
+        copy.rematchGameId = rematchGameId;
+        return copy;
     }
 
     boolean forfeit(String username) {

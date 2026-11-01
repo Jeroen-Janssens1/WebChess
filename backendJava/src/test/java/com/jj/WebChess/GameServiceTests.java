@@ -2,17 +2,49 @@ package com.jj.WebChess;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
+import org.mockito.ArgumentCaptor;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 class GameServiceTests {
 
-    private final GameService gameService = new GameService();
+    private final GameHistoryRepository gameHistoryRepository = mock(GameHistoryRepository.class);
+    private final GameService gameService = new GameService(gameHistoryRepository);
+
+    @Test
+    void forfeitPersistsGameHistoryWithPgnAndMinutePrecision() {
+        GameService.GameState game = startedGame();
+        GameService.GameState state = playMove(game, "e2", "e4");
+        state = playMove(state, "e7", "e5");
+
+        GameService.GameState ended = gameService.forfeit(state.gameId(), state.whitePlayer());
+        ArgumentCaptor<GameHistoryEntity> historyCaptor = ArgumentCaptor.forClass(GameHistoryEntity.class);
+        verify(gameHistoryRepository).save(historyCaptor.capture());
+        GameHistoryEntity history = historyCaptor.getValue();
+
+        assertEquals(game.gameId(), history.getId());
+        assertEquals(game.whitePlayer(), history.getWhiteUsername());
+        assertEquals(game.players().stream().filter(player -> !player.equals(game.whitePlayer()))
+            .findFirst().orElseThrow(), history.getBlackUsername());
+        assertEquals("0-1", history.getResult());
+        assertEquals(0, history.getPlayedAt().getSecond());
+        assertEquals(0, history.getPlayedAt().getNano());
+        assertTrue(history.getPgn().contains("[White \"" + history.getWhiteUsername() + "\"]"));
+        assertTrue(history.getPgn().contains("[Black \"" + history.getBlackUsername() + "\"]"));
+        assertTrue(history.getPgn().contains("[Result \"0-1\"]"));
+        assertTrue(history.getPgn().endsWith("1. e4 e5 0-1"));
+
+        gameService.forfeit(ended.gameId(), ended.winner());
+        verify(gameHistoryRepository, times(1)).save(history);
+    }
 
     @Test
     void localGameSupportsHotSeatPlayAndIsIndependentOfRooms() {
@@ -29,6 +61,17 @@ class GameServiceTests {
         assertTrue(blackMove.moved());
         assertTrue(blackMove.gameState().whiteToMove());
         assertEquals(List.of("e4", "e5"), blackMove.gameState().previousTurns());
+    }
+
+    @Test
+    void completedLocalHotSeatGameIsSavedForItsPlayer() {
+        GameService.GameState game = gameService.startLocalGame("alice");
+        gameService.forfeit(game.gameId(), "alice");
+
+        verify(gameHistoryRepository).save(org.mockito.ArgumentMatchers.argThat(history ->
+            history.getId().equals(game.gameId())
+                && history.getWhiteUsername().equals("alice")
+                && history.getBlackUsername().equals("alice")));
     }
 
     @Test
@@ -111,6 +154,11 @@ class GameServiceTests {
         assertEquals("CHECKMATE", state.termination());
         assertTrue(state.previousTurns().get(4).endsWith("#"));
         assertEquals(state.whitePlayer(), state.winner());
+        GameService.GameState finishedState = state;
+        verify(gameHistoryRepository).save(org.mockito.ArgumentMatchers.argThat(history ->
+            history.getId().equals(finishedState.gameId())
+                && history.getResult().equals("1-0")
+                && history.getPgn().endsWith("1. e3 f6 2. d4 g5 3. Qh5# 1-0")));
     }
 
     @Test
