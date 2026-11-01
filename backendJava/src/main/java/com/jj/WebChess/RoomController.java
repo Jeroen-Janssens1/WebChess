@@ -36,6 +36,11 @@ public class RoomController {
         return roomService.getRooms();
     }
 
+    @GetMapping("/{roomId}")
+    public RoomService.RoomView getRoom(@PathVariable String roomId, Principal principal) {
+        return roomService.getRoom(roomId, principal.getName());
+    }
+
     @PostMapping("/join")
     public RoomService.RoomView joinRoom(@RequestBody JoinRoomRequest request, Principal principal) {
         return roomService.join(principal.getName(), request.roomIdOrName(), request.password());
@@ -45,6 +50,44 @@ public class RoomController {
     public ResponseEntity<GameService.GameState> startGame(
             @PathVariable String roomId, Principal principal) {
         return ResponseEntity.status(201).body(roomService.startGame(roomId, principal.getName()));
+    }
+
+    @PostMapping("/{roomId}/host")
+    public RoomService.RoomView transferHost(
+            @PathVariable String roomId, @RequestBody TransferHostRequest request, Principal principal) {
+        return roomService.transferHost(roomId, principal.getName(), request.username());
+    }
+
+    @PostMapping("/{roomId}/games/requests")
+    public ResponseEntity<RoomService.GameRequestView> requestGame(
+            @PathVariable String roomId, @RequestBody GameRequest request, Principal principal) {
+        return ResponseEntity.status(201)
+            .body(roomService.requestGame(roomId, principal.getName(), request.opponent()));
+    }
+
+    @PostMapping("/{roomId}/games/requests/{requestId}/accept")
+    public ResponseEntity<GameService.GameState> acceptGameRequest(
+            @PathVariable String roomId, @PathVariable String requestId, Principal principal) {
+        return ResponseEntity.status(201)
+            .body(roomService.acceptGameRequest(roomId, requestId, principal.getName()));
+    }
+
+    @PostMapping("/{roomId}/games/requests/{requestId}/decline")
+    public RoomService.RoomView declineGameRequest(
+            @PathVariable String roomId, @PathVariable String requestId, Principal principal) {
+        return roomService.declineGameRequest(roomId, requestId, principal.getName());
+    }
+
+    @GetMapping("/{roomId}/games/{gameId}")
+    public GameService.GameState getRoomGame(
+            @PathVariable String roomId, @PathVariable String gameId, Principal principal) {
+        return roomService.getRoomGame(roomId, gameId, principal.getName());
+    }
+
+    @GetMapping(value = "/{roomId}/games/{gameId}/events", produces = "text/event-stream")
+    public SseEmitter subscribeToRoomGame(
+            @PathVariable String roomId, @PathVariable String gameId, Principal principal) {
+        return roomService.subscribeToRoomGame(roomId, gameId, principal.getName());
     }
 
     @DeleteMapping("/{roomId}/members/me")
@@ -64,7 +107,17 @@ public class RoomController {
             .body(Map.of("error", exception.getMessage()));
     }
 
+    @ExceptionHandler(GameService.GameException.class)
+    public ResponseEntity<Map<String, String>> handleGameException(GameService.GameException exception) {
+        return ResponseEntity.status(exception.getStatus())
+            .body(Map.of("error", exception.getMessage()));
+    }
+
     public record CreateRoomRequest(String name, String password) {}
 
     public record JoinRoomRequest(String roomIdOrName, String password) {}
+
+    public record TransferHostRequest(String username) {}
+
+    public record GameRequest(String opponent) {}
 }

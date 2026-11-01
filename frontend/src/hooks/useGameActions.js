@@ -25,10 +25,18 @@ function useGameActions({
     }
   };
 
-  const openExistingGame = useCallback(async (gameId) => {
+  const openExistingGame = useCallback(async (gameId, roomId = null) => {
     try {
-      const state = await api(`/api/games/${encodeURIComponent(gameId)}`);
-      const currentGame = await resolveLatestGame(state);
+      let gamesPath = '/api/games';
+      let state;
+      try {
+        state = await api(`${gamesPath}/${encodeURIComponent(gameId)}`);
+      } catch (error) {
+        if (error.status !== 403 || !roomId) throw error;
+        gamesPath = `/api/rooms/${encodeURIComponent(roomId)}/games`;
+        state = await api(`${gamesPath}/${encodeURIComponent(gameId)}`);
+      }
+      const currentGame = await resolveLatestGame(state, gamesPath);
       setGame(currentGame);
       setScreen('game');
     } catch (error) {

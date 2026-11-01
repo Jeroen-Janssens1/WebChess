@@ -18,7 +18,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @Service
 public class RoomService {
 
-    private static final int ROOM_CAPACITY = 2;
+    private static final int ROOM_CAPACITY = 20;
 
     private final Map<String, Room> rooms = new LinkedHashMap<>();
     private final Map<String, List<Subscription>> subscriptions = new HashMap<>();
@@ -49,7 +49,13 @@ public class RoomService {
     }
 
     public synchronized List<RoomView> getRooms() {
-        return rooms.values().stream().map(Room::toView).toList();
+        return rooms.values().stream().map(Room::toListingView).toList();
+    }
+
+    public synchronized RoomView getRoom(String roomId, String username) {
+        Room room = getRoom(roomId);
+        requireMember(room, username);
+        return room.toView();
     }
 
     public synchronized RoomView join(String username, String roomIdOrName, String password) {
@@ -67,9 +73,6 @@ public class RoomService {
 
         if (room.members.contains(username)) {
             return room.toView();
-        }
-        if (room.gameId != null) {
-            throw new RoomException(HttpStatus.CONFLICT, "A game has already started in this room");
         }
         if (room.passwordHash != null
                 && (password == null || !passwordEncoder.matches(password, room.passwordHash))) {
@@ -92,18 +95,104 @@ public class RoomService {
         if (!room.creator.equals(username)) {
             throw new RoomException(HttpStatus.FORBIDDEN, "Only the room host can start a game");
         }
-        if (room.members.size() != ROOM_CAPACITY) {
-            throw new RoomException(HttpStatus.CONFLICT, "A game can only start with two players");
-        }
-        if (room.gameId != null) {
-            throw new RoomException(HttpStatus.CONFLICT, "A game has already started in this room");
+        if (room.members.size() < 2) {
+            throw new RoomException(HttpStatus.CONFLICT, "A game requires two room members");
         }
 
-        List<String> players = List.copyOf(room.members);
+        List<String> players = room.members.stream().limit(2).toList();
+        ensurePlayersAvailable(room.id, players);
         GameService.GameState gameState = gameService.startRoomGame(roomId, players);
-        room.gameId = gameState.gameId();
+        room.gameIds.add(gameState.gameId());
         notifyRoomUpdated(room, null);
         return gameState;
+    }
+
+    public synchronized GameService.RematchResult requestRematch(String gameId, String username) {
+        GameService.RematchResult result = gameService.requestRematch(gameId, username);
+        if (result.started()) {
+            String roomId = result.gameState().roomId();
+            Room room = rooms.get(roomId);
+            if (room != null) {
+                notifyRoomUpdated(room, null);
+            }
+        }
+        return result;
+    }
+
+    public synchronized RoomView transferHost(String roomId, String username, String newHost) {
+        Room room = getRoom(roomId);
+        requireMember(room, username);
+        if (!room.creator.equals(username)) {
+            throw new RoomException(HttpStatus.FORBIDDEN, "Only the room host can transfer host privileges");
+        }
+        if (newHost == null || !room.members.contains(newHost)) {
+            throw new RoomException(HttpStatus.BAD_REQUEST, "The new host must be a room member");
+        }
+        if (newHost.equals(username)) {
+            throw new RoomException(HttpStatus.BAD_REQUEST, "You are already the room host");
+        }
+        room.creator = newHost;
+        notifyRoomUpdated(room, null);
+        return room.toView();
+    }
+
+    public synchronized GameRequestView requestGame(String roomId, String username, String opponent) {
+        Room room = getRoom(roomId);
+        requireMember(room, username);
+        if (opponent == null || !room.members.contains(opponent) || username.equals(opponent)) {
+            throw new RoomException(HttpStatus.BAD_REQUEST, "Choose another member of this room");
+        }
+        ensurePlayersAvailable(room.id, List.of(username, opponent));
+        if (room.gameRequests.values().stream().anyMatch(request ->
+                (request.requester.equals(username) && request.opponent.equals(opponent))
+                    || (request.requester.equals(opponent) && request.opponent.equals(username)))) {
+            throw new RoomException(HttpStatus.CONFLICT, "A game request is already pending between these members");
+        }
+        GameRequest request = new GameRequest(UUID.randomUUID().toString(), username, opponent);
+        room.gameRequests.put(request.id, request);
+        notifyRoomUpdated(room, null);
+        return request.toView();
+    }
+
+    public synchronized GameService.GameState acceptGameRequest(
+            String roomId, String requestId, String username) {
+        Room room = getRoom(roomId);
+        requireMember(room, username);
+        GameRequest request = getGameRequest(room, requestId);
+        if (!request.opponent.equals(username)) {
+            throw new RoomException(HttpStatus.FORBIDDEN, "Only the invited member can accept this request");
+        }
+        ensurePlayersAvailable(room.id, List.of(request.requester, request.opponent));
+        GameService.GameState game = gameService.startRoomGame(
+            roomId, List.of(request.requester, request.opponent));
+        room.gameRequests.remove(requestId);
+        room.gameIds.add(game.gameId());
+        notifyRoomUpdated(room, null);
+        return game;
+    }
+
+    public synchronized RoomView declineGameRequest(String roomId, String requestId, String username) {
+        Room room = getRoom(roomId);
+        requireMember(room, username);
+        GameRequest request = getGameRequest(room, requestId);
+        if (!request.opponent.equals(username)) {
+            throw new RoomException(HttpStatus.FORBIDDEN, "Only the invited member can decline this request");
+        }
+        room.gameRequests.remove(requestId);
+        notifyRoomUpdated(room, null);
+        return room.toView();
+    }
+
+    public synchronized GameService.GameState getRoomGame(String roomId, String gameId, String username) {
+        Room room = getRoom(roomId);
+        requireMember(room, username);
+        return gameService.getRoomGameState(roomId, gameId);
+    }
+
+    public synchronized SseEmitter subscribeToRoomGame(String roomId, String gameId, String username) {
+        Room room = getRoom(roomId);
+        requireMember(room, username);
+        return gameService.subscribeToRoomGame(roomId, gameId, username);
     }
 
     public synchronized boolean leave(String roomId, String username) {
@@ -117,6 +206,7 @@ public class RoomService {
 
         if (room.creator.equals(username)) {
             rooms.remove(roomId);
+            gameService.unsubscribeRoomMembers(roomId);
             List<Subscription> roomSubscriptions = subscriptions.remove(roomId);
             if (roomSubscriptions != null) {
                 for (Subscription subscription : List.copyOf(roomSubscriptions)) {
@@ -134,6 +224,9 @@ public class RoomService {
         }
 
         room.members.remove(username);
+        gameService.unsubscribeRoomMember(roomId, username);
+        room.gameRequests.values().removeIf(request ->
+            request.requester.equals(username) || request.opponent.equals(username));
         List<Subscription> roomSubscriptions = subscriptions.get(roomId);
         if (roomSubscriptions != null) {
             roomSubscriptions.stream()
@@ -168,13 +261,8 @@ public class RoomService {
     }
 
     public synchronized SseEmitter subscribe(String roomId, String username) {
-        Room room = rooms.get(roomId);
-        if (room == null) {
-            throw new RoomException(HttpStatus.NOT_FOUND, "Room not found");
-        }
-        if (!room.members.contains(username)) {
-            throw new RoomException(HttpStatus.FORBIDDEN, "Join the room before subscribing");
-        }
+        Room room = getRoom(roomId);
+        requireMember(room, username);
 
         SseEmitter emitter = new SseEmitter(0L);
         Subscription subscription = new Subscription(username, emitter);
@@ -203,7 +291,38 @@ public class RoomService {
 
     public record RoomView(
             String id, String name, String creator, List<String> users,
-            boolean passwordProtected, String gameId) {}
+            boolean passwordProtected, String gameId,
+            List<GameService.RoomGameView> games, List<GameRequestView> gameRequests) {}
+
+    public record GameRequestView(String id, String requester, String opponent) {}
+
+    private Room getRoom(String roomId) {
+        Room room = rooms.get(roomId);
+        if (room == null) {
+            throw new RoomException(HttpStatus.NOT_FOUND, "Room not found");
+        }
+        return room;
+    }
+
+    private void requireMember(Room room, String username) {
+        if (!room.members.contains(username)) {
+            throw new RoomException(HttpStatus.FORBIDDEN, "Join the room first");
+        }
+    }
+
+    private void ensurePlayersAvailable(String roomId, List<String> players) {
+        if (players.stream().anyMatch(player -> gameService.hasActiveRoomGame(roomId, player))) {
+            throw new RoomException(HttpStatus.CONFLICT, "A room member is already playing an active game");
+        }
+    }
+
+    private GameRequest getGameRequest(Room room, String requestId) {
+        GameRequest request = room.gameRequests.get(requestId);
+        if (request == null) {
+            throw new RoomException(HttpStatus.NOT_FOUND, "Game request not found");
+        }
+        return request;
+    }
 
     public static class RoomException extends RuntimeException {
         private final HttpStatus status;
@@ -218,13 +337,14 @@ public class RoomService {
         }
     }
 
-    private static class Room {
+    private class Room {
         private final String id;
         private final String name;
-        private final String creator;
+        private String creator;
         private final String passwordHash;
         private final Set<String> members = new LinkedHashSet<>();
-        private String gameId;
+        private final List<String> gameIds = new ArrayList<>();
+        private final Map<String, GameRequest> gameRequests = new LinkedHashMap<>();
 
         private Room(String id, String name, String creator, String passwordHash) {
             this.id = id;
@@ -234,7 +354,22 @@ public class RoomService {
         }
 
         private RoomView toView() {
-            return new RoomView(id, name, creator, List.copyOf(members), passwordHash != null, gameId);
+            List<GameService.RoomGameView> games = gameService.getRoomGames(id);
+            String latestGameId = gameIds.isEmpty() ? null : gameIds.get(gameIds.size() - 1);
+            return new RoomView(id, name, creator, List.copyOf(members), passwordHash != null,
+                latestGameId, games, gameRequests.values().stream().map(GameRequest::toView).toList());
+        }
+
+        private RoomView toListingView() {
+            String latestGameId = gameIds.isEmpty() ? null : gameIds.get(gameIds.size() - 1);
+            return new RoomView(id, name, creator, List.copyOf(members), passwordHash != null,
+                latestGameId, List.of(), List.of());
+        }
+    }
+
+    private record GameRequest(String id, String requester, String opponent) {
+        private GameRequestView toView() {
+            return new GameRequestView(id, requester, opponent);
         }
     }
 

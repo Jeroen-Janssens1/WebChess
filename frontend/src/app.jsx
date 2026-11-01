@@ -39,7 +39,10 @@ function App() {
     setUser, setRoom, setGame, setScreen, setSuppressRoomGameId
   });
 
-  const { createRoom, joinRoom, startRoomGame, leaveRoom, handleRoomClosed } = useRoomActions({
+  const {
+    createRoom, joinRoom, transferHost, requestGame,
+    acceptGameRequest, declineGameRequest, leaveRoom, handleRoomClosed
+  } = useRoomActions({
     room, screen, setRooms, setRoom, setGame, setScreen, setModal,
     setSuppressRoomGameId, setBusy, notify
   });
@@ -49,10 +52,6 @@ function App() {
   const { logout, submitAuth } = useAuthActions({
     setUser, setRoom, setGame, setScreen, setModal, setBusy, notify
   });
-
-  const handleGameReady = useCallback((id) => {
-    if (id && id !== suppressRoomGameId) openExistingGame(id);
-  }, [openExistingGame, suppressRoomGameId]);
 
   return (
     <main className={`app-shell screen-${screen}`}>
@@ -75,8 +74,10 @@ function App() {
       )}
       {screen === 'room' && room && (
         <RoomLobby room={room} user={user} busy={busy}
-          onRoomChange={setRoom} onStart={startRoomGame} onLeave={leaveRoom}
-          onGameReady={handleGameReady} onRoomClosed={handleRoomClosed} />
+          onRoomChange={setRoom} onLeave={leaveRoom}
+          onTransferHost={transferHost} onRequestGame={requestGame}
+          onAcceptGameRequest={acceptGameRequest} onDeclineGameRequest={declineGameRequest}
+          onOpenGame={(id) => openExistingGame(id, room.id)} onRoomClosed={handleRoomClosed} />
       )}
       {screen === 'game' && game && (
         <GameScreen key={game.gameId} initialGame={game} user={user}

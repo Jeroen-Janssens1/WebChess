@@ -67,13 +67,65 @@ function useRoomActions({
     }
   };
 
-  const startRoomGame = async () => {
+  const transferHost = async (username) => {
     if (!room) return;
     setBusy(true);
     try {
-      const started = await api(`/api/rooms/${encodeURIComponent(room.id)}/games`, { method: 'POST' });
-      setGame(started);
-      setScreen('game');
+      const updated = await api(`/api/rooms/${encodeURIComponent(room.id)}/host`, {
+        method: 'POST',
+        body: JSON.stringify({ username })
+      });
+      setRoom(updated);
+    } catch (error) {
+      notify(error.message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const requestGame = async (opponent) => {
+    if (!room) return;
+    setBusy(true);
+    try {
+      await api(`/api/rooms/${encodeURIComponent(room.id)}/games/requests`, {
+        method: 'POST',
+        body: JSON.stringify({ opponent })
+      });
+      notify(`Game request sent to ${opponent}.`);
+    } catch (error) {
+      notify(error.message, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const acceptGameRequest = async (requestId) => {
+    if (!room) return null;
+    setBusy(true);
+    try {
+      const started = await api(
+        `/api/rooms/${encodeURIComponent(room.id)}/games/requests/${encodeURIComponent(requestId)}/accept`,
+        { method: 'POST' }
+      );
+      setRoom(await api(`/api/rooms/${encodeURIComponent(room.id)}`));
+      return started;
+    } catch (error) {
+      notify(error.message, true);
+      return null;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const declineGameRequest = async (requestId) => {
+    if (!room) return;
+    setBusy(true);
+    try {
+      const updated = await api(
+        `/api/rooms/${encodeURIComponent(room.id)}/games/requests/${encodeURIComponent(requestId)}/decline`,
+        { method: 'POST' }
+      );
+      setRoom(updated);
     } catch (error) {
       notify(error.message, true);
     } finally {
@@ -104,7 +156,10 @@ function useRoomActions({
     notify('The room was closed by its host.');
   }, [notify, setGame, setRoom, setScreen]);
 
-  return { createRoom, joinRoom, startRoomGame, leaveRoom, handleRoomClosed };
+  return {
+    createRoom, joinRoom, transferHost, requestGame,
+    acceptGameRequest, declineGameRequest, leaveRoom, handleRoomClosed
+  };
 }
 
 export default useRoomActions;

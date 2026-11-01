@@ -18,9 +18,11 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 public class GameController {
 
     private final GameService gameService;
+    private final RoomService roomService;
 
-    public GameController(GameService gameService) {
+    public GameController(GameService gameService, RoomService roomService) {
         this.gameService = gameService;
+        this.roomService = roomService;
     }
 
     @PostMapping
@@ -57,7 +59,7 @@ public class GameController {
 
     @PostMapping("/{gameId}/rematch")
     public GameService.RematchResult requestRematch(@PathVariable String gameId, Principal principal) {
-        return gameService.requestRematch(gameId, principal.getName());
+        return roomService.requestRematch(gameId, principal.getName());
     }
 
     @GetMapping(value = "/{gameId}/events", produces = "text/event-stream")

@@ -19,28 +19,44 @@ function GameScreen({
   const boardRef = useRef(null);
   const gesture = useRef(null);
   const suppressClick = useRef(false);
+  const returnedFromFinishedSpectating = useRef(false);
   const isLocal = !game.roomId;
-  const isWhite = game.players.length === 1 || game.whitePlayer === user;
+  const isSpectator = Boolean(game.roomId) && !game.players.includes(user);
+  const isWhite = isSpectator || game.players.length === 1 || game.whitePlayer === user;
+  const gamesPath = game.roomId && isSpectator && hasRoom
+    ? `/api/rooms/${encodeURIComponent(game.roomId)}/games`
+    : '/api/games';
   const sideToMovePlayer = game.whiteToMove ? game.whitePlayer
     : game.players.find((player) => player !== game.whitePlayer);
-  const opponentName = isLocal ? 'Black side' : game.players.find((player) => player !== user);
-  const selfName = isLocal ? 'White side' : user;
-  const isYourTurn = isLocal || sideToMovePlayer === user;
+  const blackPlayer = game.players.find((player) => player !== game.whitePlayer);
+  const opponentName = isLocal ? 'Black side'
+    : isSpectator ? (isWhite ? blackPlayer : game.whitePlayer)
+      : game.players.find((player) => player !== user);
+  const selfName = isLocal ? 'White side'
+    : isSpectator ? (isWhite ? game.whitePlayer : blackPlayer) : user;
+  const isYourTurn = !isSpectator && (isLocal || sideToMovePlayer === user);
   const turnColor = game.whiteToMove ? 'White' : 'Black';
   const gameEnded = game.status === 'FINISHED' || game.previousTurns?.at(-1)?.endsWith('#');
   const rematchRequested = game.rematchRequests?.includes(user);
   const didWin = game.winnerColor ? (game.winnerColor === 'WHITE') === isWhite : false;
 
   useEffect(() => {
+    if (isSpectator && gameEnded && !returnedFromFinishedSpectating.current) {
+      returnedFromFinishedSpectating.current = true;
+      onBack();
+    }
+  }, [gameEnded, isSpectator, onBack]);
+
+  useEffect(() => {
     let alive = true;
     const applyState = async (state) => {
-      const current = await resolveLatestGame(state);
+      const current = await resolveLatestGame(state, gamesPath);
       if (alive) updateGame(current);
     };
-    api(`/api/games/${encodeURIComponent(initialGame.gameId)}`)
+    api(`${gamesPath}/${encodeURIComponent(initialGame.gameId)}`)
       .then(applyState)
       .catch((error) => { if (alive) setGameError(error.message); });
-    const stream = new EventSource(`/api/games/${encodeURIComponent(initialGame.gameId)}/events`);
+    const stream = new EventSource(`${gamesPath}/${encodeURIComponent(initialGame.gameId)}/events`);
     const update = (event) => applyState(JSON.parse(event.data))
       .catch((error) => { if (alive) setGameError(error.message); });
     stream.addEventListener('game_started', update);
@@ -54,7 +70,7 @@ function GameScreen({
       alive = false;
       stream.close();
     };
-  }, [initialGame.gameId, setGameError]);
+  }, [initialGame.gameId, gamesPath, setGameError]);
 
   function updateGame(state) {
     setGame(state);
@@ -64,7 +80,7 @@ function GameScreen({
   }
 
   const selectSquare = async (square) => {
-    if (busy || gameEnded) return [];
+    if (busy || gameEnded || isSpectator) return [];
     setBusy(true);
     try {
       const selection = await api(`/api/games/${encodeURIComponent(game.gameId)}/select`, {
@@ -85,7 +101,7 @@ function GameScreen({
   };
 
   const moveTo = async (to, promotion = null, fromSquare = selected) => {
-    if (!fromSquare || busy || !isYourTurn || gameEnded) return;
+    if (!fromSquare || busy || !isYourTurn || gameEnded || isSpectator) return;
     const from = fromSquare;
     const movingPiece = game.board[8 - Number(from[1])][from.charCodeAt(0) - 97];
     const reachesLastRank = movingPiece?.toLowerCase() === 'p'
@@ -117,7 +133,7 @@ function GameScreen({
 
   const squareAtPoint = (x, y) => document.elementFromPoint(x, y)?.closest('[data-square]')?.dataset.square;
   const handlePointerDown = (event, square, piece) => {
-    if (event.button !== 0 || !piece || busy || gameEnded) return;
+    if (event.button !== 0 || !piece || busy || gameEnded || isSpectator) return;
     if (selected && legalMoves.includes(square)) return;
     const canSelect = isLocal || (piece === piece.toUpperCase()) === isWhite;
     if (!canSelect) return;
@@ -164,7 +180,7 @@ function GameScreen({
       return;
     }
     const canSelect = piece && (isLocal || (piece === piece.toUpperCase()) === isWhite);
-    if (canSelect && !gameEnded) {
+    if (canSelect && !gameEnded && !isSpectator) {
       selectSquare(square);
     }
   };
@@ -207,13 +223,13 @@ function GameScreen({
   return (
     <div className="page-frame game-frame">
       <header className="topbar game-topbar">
-        <span className="game-type-label">{isLocal ? 'LOCAL BOARD' : 'ROOM BOARD'}</span>
+        <span className="game-type-label">{isLocal ? 'LOCAL BOARD' : isSpectator ? 'ROOM SPECTATOR' : 'ROOM BOARD'}</span>
         <a className="small-brand" href="#" onClick={(event) => event.preventDefault()}><span>♞</span> WEB CHESS</a>
       </header>
       <section className="game-layout">
         <div className="game-title-row">
-          <div><p className="eyebrow">{isLocal ? 'LOCAL GAME' : 'ROOM GAME'}</p><h1>The board is <em>yours.</em></h1></div>
-          <div className={`turn-indicator${isYourTurn && !gameEnded ? ' your-turn' : ''}`}><span className={`turn-piece ${game.whiteToMove ? 'turn-white' : 'turn-black'}`}>{game.whiteToMove ? '♙' : '♟'}</span><span><small>{gameEnded ? 'GAME OVER' : isYourTurn ? 'YOUR TURN' : 'OPPONENT’S TURN'}</small><strong>{gameEnded ? endTitle : `${turnColor} to move`}</strong></span></div>
+          <div><p className="eyebrow">{isLocal ? 'LOCAL GAME' : isSpectator ? 'SPECTATING' : 'ROOM GAME'}</p><h1>{isSpectator ? <>Watch the <em>game.</em></> : <>The board is <em>yours.</em></>}</h1></div>
+          <div className={`turn-indicator${isYourTurn && !gameEnded ? ' your-turn' : ''}`}><span className={`turn-piece ${game.whiteToMove ? 'turn-white' : 'turn-black'}`}>{game.whiteToMove ? '♙' : '♟'}</span><span><small>{isSpectator ? 'SPECTATING' : gameEnded ? 'GAME OVER' : isYourTurn ? 'YOUR TURN' : 'OPPONENT’S TURN'}</small><strong>{gameEnded ? endTitle : `${turnColor} to move`}</strong></span></div>
         </div>
         <div className="play-area">
           <div className="board-column">
@@ -232,6 +248,7 @@ function GameScreen({
                     <button type="button" key={square} data-square={square}
                       className={`board-square ${isDark ? 'dark-square' : 'light-square'}${selected === square ? ' selected-square' : ''}${canMove ? ' legal-square' : ''}`}
                       aria-label={`${square}${piece ? ` ${piece}` : ''}${canMove ? ', legal move' : ''}`}
+                      disabled={isSpectator}
                       onPointerDown={(event) => handlePointerDown(event, square, piece)}
                       onClick={() => handleSquareClick(square, piece)}>
                       <span className="coordinate">{displayCol === 0 && (isWhite ? 8 - displayRow : displayRow + 1)}</span>
@@ -258,7 +275,7 @@ function GameScreen({
             <div className="sidebar-card">
               <p className="eyebrow">GAME STATUS</p>
               <div className={`status-callout${isYourTurn && !gameEnded ? ' status-active' : ''}`}><span className="status-pip" /><strong>{gameEnded ? endTitle : isYourTurn ? 'Your move' : `${turnColor} to move`}</strong></div>
-              <p className="status-note">{gameEnded ? endCopy : isLocal ? 'Pass the device after each turn.' : isYourTurn ? 'Choose a piece to see its legal moves.' : 'Select one of your pieces to preview its moves.'}</p>
+              <p className="status-note">{isSpectator && !gameEnded ? 'You are watching this room game live.' : gameEnded ? endCopy : isLocal ? 'Pass the device after each turn.' : isYourTurn ? 'Choose a piece to see its legal moves.' : 'Select one of your pieces to preview its moves.'}</p>
             </div>
             <div className="sidebar-card moves-card">
               <div className="move-history-head"><p className="eyebrow">MOVE HISTORY</p><span>{game.previousTurns?.length || 0} PLY</span></div>
@@ -271,11 +288,12 @@ function GameScreen({
               )}
             </div>
             {gameError && <p className="connection-note">{gameError}</p>}
-            {!gameEnded && <button className="button button-quiet full-button" onClick={() => setConfirmForfeit(true)}>Forfeit game</button>}
+            {!gameEnded && !isSpectator && <button className="button button-quiet full-button" onClick={() => setConfirmForfeit(true)}>Forfeit game</button>}
+            {isSpectator && <button className="button button-quiet full-button" onClick={onBack}>Return to room</button>}
           </aside>
         </div>
       </section>
-      {gameEnded && <Modal title={endTitle} onClose={() => {}} showClose={false}>
+      {gameEnded && !isSpectator && <Modal title={endTitle} onClose={() => {}} showClose={false}>
         <p className="modal-copy">{endCopy}</p>
         {game.players.length > 1 && <p className="modal-copy rematch-status">
           {rematchRequested
@@ -294,7 +312,7 @@ function GameScreen({
           {game.roomId && hasRoom ? 'Return to room' : 'Back to main menu'} <span>↗</span>
         </button>
       </Modal>}
-      {promotionTarget && <PromotionModal isWhite={game.board[8 - Number(selected[1])][selected.charCodeAt(0) - 97] === 'P'}
+      {promotionTarget && !isSpectator && <PromotionModal isWhite={game.board[8 - Number(selected[1])][selected.charCodeAt(0) - 97] === 'P'}
         onChoose={(promotion) => {
           const target = promotionTarget;
           setPromotionTarget(null);

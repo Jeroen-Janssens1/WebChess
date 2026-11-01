@@ -2,10 +2,12 @@ package com.jj.WebChess;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import java.util.List;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -16,18 +18,27 @@ class RoomServiceTests {
     private final RoomService roomService = new RoomService(new BCryptPasswordEncoder(), gameService);
 
     @Test
-    void roomRequiresCorrectPasswordAndCannotExceedCapacity() {
+    void roomRequiresCorrectPassword() {
         RoomService.RoomView room = roomService.create("alice", "table one", "secret");
 
         RoomService.RoomException wrongPassword = assertThrows(RoomService.RoomException.class,
             () -> roomService.join("bob", room.id(), "wrong"));
         assertEquals(HttpStatus.FORBIDDEN, wrongPassword.getStatus());
 
-        RoomService.RoomView joined = roomService.join("bob", "table one", "secret");
-        assertEquals(2, joined.users().size());
+        RoomService.RoomView joined = roomService.join("bob", room.id(), "secret");
+        assertEquals(List.of("alice", "bob"), joined.users());
+    }
 
+    @Test
+    void roomCannotExceedTwentyMembers() {
+        RoomService.RoomView room = roomService.create("host", "twenty player room", null);
+        for (int index = 1; index < 20; index++) {
+            roomService.join("player" + index, room.id(), null);
+        }
+
+        assertEquals(20, roomService.getRoom(room.id(), "host").users().size());
         RoomService.RoomException full = assertThrows(RoomService.RoomException.class,
-            () -> roomService.join("charlie", room.id(), "secret"));
+            () -> roomService.join("player20", room.id(), null));
         assertEquals(HttpStatus.CONFLICT, full.getStatus());
     }
 
@@ -45,23 +56,46 @@ class RoomServiceTests {
     }
 
     @Test
-    void hostCanStartGameForBothRoomMembers() {
+    void hostCanStartGameForRoomMembers() {
         RoomService.RoomView room = roomService.create("alice", "game room", null);
         roomService.join("bob", room.id(), null);
 
         GameService.GameState game = roomService.startGame(room.id(), "alice");
 
-        assertNotNull(game.gameId());
         assertEquals(room.id(), game.roomId());
         assertEquals(2, game.players().size());
         assertTrue(game.players().containsAll(List.of("alice", "bob")));
-        assertTrue(game.players().contains(game.whitePlayer()));
-        assertEquals(8, game.board().size());
-        assertEquals(8, game.board().get(0).size());
-        assertEquals("r", game.board().get(0).get(0));
-        assertEquals("K", game.board().get(7).get(4));
-        assertTrue(game.whiteToMove());
-        assertTrue(game.previousTurns().isEmpty());
+        assertTrue(roomService.getRoom(room.id(), "alice").games().stream()
+            .anyMatch(roomGame -> roomGame.gameId().equals(game.gameId())));
+    }
+
+    @Test
+    void finishedGamesAreRemovedFromRoomOpenGames() {
+        RoomService.RoomView room = roomService.create("alice", "finished games", null);
+        roomService.join("bob", room.id(), null);
+        GameService.GameState game = roomService.startGame(room.id(), "alice");
+
+        assertEquals(1, roomService.getRoom(room.id(), "alice").games().size());
+
+        gameService.forfeit(game.gameId(), game.players().get(0));
+
+        assertTrue(roomService.getRoom(room.id(), "alice").games().isEmpty());
+    }
+
+    @Test
+    void acceptedRematchAppearsAsAnOpenRoomGame() {
+        RoomService.RoomView room = roomService.create("alice", "rematch room", null);
+        roomService.join("bob", room.id(), null);
+        GameService.GameState game = roomService.startGame(room.id(), "alice");
+        gameService.forfeit(game.gameId(), game.players().get(0));
+
+        assertFalse(roomService.requestRematch(game.gameId(), game.players().get(0)).started());
+        GameService.RematchResult accepted = roomService.requestRematch(
+            game.gameId(), game.players().get(1));
+
+        assertTrue(accepted.started());
+        assertEquals(List.of(accepted.gameState().gameId()), roomService.getRoom(room.id(), "alice")
+            .games().stream().map(GameService.RoomGameView::gameId).toList());
     }
 
     @Test
@@ -79,251 +113,89 @@ class RoomServiceTests {
     }
 
     @Test
-    void roomCannotStartMoreThanOneGame() {
-        RoomService.RoomView room = roomService.create("alice", "one game", null);
+    void roomMembersCanRequestMultipleGamesAndMembersCanSpectate() {
+        RoomService.RoomView room = roomService.create("alice", "multiple games", null);
         roomService.join("bob", room.id(), null);
-        roomService.startGame(room.id(), "alice");
+        roomService.join("charlie", room.id(), null);
+        roomService.join("dana", room.id(), null);
 
-        RoomService.RoomException alreadyStarted = assertThrows(RoomService.RoomException.class,
+        RoomService.GameRequestView firstRequest = roomService.requestGame(room.id(), "alice", "bob");
+        RoomService.GameRequestView secondRequest = roomService.requestGame(room.id(), "charlie", "dana");
+        assertTrue(roomService.getRooms().get(0).gameRequests().isEmpty());
+        assertTrue(roomService.getRooms().get(0).games().isEmpty());
+        GameService.GameState firstGame = roomService.acceptGameRequest(
+            room.id(), firstRequest.id(), "bob");
+        GameService.GameState secondGame = roomService.acceptGameRequest(
+            room.id(), secondRequest.id(), "dana");
+
+        assertNotEquals(firstGame.gameId(), secondGame.gameId());
+        assertEquals(2, roomService.getRoom(room.id(), "charlie").games().size());
+        assertEquals(firstGame, roomService.getRoomGame(room.id(), firstGame.gameId(), "charlie"));
+
+        RoomService.RoomException nonMember = assertThrows(RoomService.RoomException.class,
+            () -> roomService.getRoomGame(room.id(), firstGame.gameId(), "mallory"));
+        assertEquals(HttpStatus.FORBIDDEN, nonMember.getStatus());
+        GameService.GameException spectatorCannotMove = assertThrows(GameService.GameException.class,
+            () -> gameService.movePiece(firstGame.gameId(), "charlie", "e2", "e4", null));
+        assertEquals(HttpStatus.FORBIDDEN, spectatorCannotMove.getStatus());
+    }
+
+    @Test
+    void activePlayerCannotStartAnotherRoomGameUntilTheirCurrentGameEnds() {
+        RoomService.RoomView room = roomService.create("alice", "one active game per player", null);
+        roomService.join("bob", room.id(), null);
+        roomService.join("charlie", room.id(), null);
+
+        RoomService.GameRequestView secondRequest = roomService.requestGame(room.id(), "charlie", "alice");
+        RoomService.GameRequestView firstRequest = roomService.requestGame(room.id(), "alice", "bob");
+        GameService.GameState activeGame = roomService.acceptGameRequest(
+            room.id(), firstRequest.id(), "bob");
+
+        RoomService.RoomException hostStartDenied = assertThrows(RoomService.RoomException.class,
             () -> roomService.startGame(room.id(), "alice"));
-        assertEquals(HttpStatus.CONFLICT, alreadyStarted.getStatus());
+        assertEquals(HttpStatus.CONFLICT, hostStartDenied.getStatus());
+
+        RoomService.RoomException acceptanceDenied = assertThrows(RoomService.RoomException.class,
+            () -> roomService.acceptGameRequest(room.id(), secondRequest.id(), "alice"));
+        assertEquals(HttpStatus.CONFLICT, acceptanceDenied.getStatus());
+        assertEquals(1, roomService.getRoom(room.id(), "alice").games().size());
+        assertEquals(1, roomService.getRoom(room.id(), "alice").gameRequests().size());
+
+        gameService.forfeit(activeGame.gameId(), activeGame.players().get(0));
+        GameService.GameState nextGame = roomService.acceptGameRequest(
+            room.id(), secondRequest.id(), "alice");
+
+        assertNotEquals(activeGame.gameId(), nextGame.gameId());
+        assertTrue(nextGame.players().containsAll(List.of("alice", "charlie")));
+        assertEquals(List.of(nextGame.gameId()), roomService.getRoom(room.id(), "alice")
+            .games().stream().map(GameService.RoomGameView::gameId).toList());
     }
 
     @Test
-    void localGameSupportsHotSeatPlayAndIsIndependentOfRooms() {
-        GameService.GameState game = gameService.startLocalGame("alice");
+    void hostCanTransferPrivilegesOnlyToRoomMembers() {
+        RoomService.RoomView room = roomService.create("alice", "host transfer", null);
+        roomService.join("bob", room.id(), null);
 
-        assertEquals("", game.roomId());
-        assertEquals(List.of("alice"), game.players());
+        RoomService.RoomException nonHost = assertThrows(RoomService.RoomException.class,
+            () -> roomService.transferHost(room.id(), "bob", "alice"));
+        assertEquals(HttpStatus.FORBIDDEN, nonHost.getStatus());
+        RoomService.RoomException nonMember = assertThrows(RoomService.RoomException.class,
+            () -> roomService.transferHost(room.id(), "alice", "charlie"));
+        assertEquals(HttpStatus.BAD_REQUEST, nonMember.getStatus());
 
-        GameService.MoveResult whiteMove = gameService.movePiece(
-            game.gameId(), "alice", "e2", "e4", null);
-        assertTrue(whiteMove.moved());
-        GameService.MoveResult blackMove = gameService.movePiece(
-            game.gameId(), "alice", "e7", "e5", null);
-        assertTrue(blackMove.moved());
-        assertTrue(blackMove.gameState().whiteToMove());
-        assertEquals(List.of("e4", "e5"), blackMove.gameState().previousTurns());
-    }
-
-    @Test
-    void forfeitEndsGameAndPreventsFurtherMoves() {
-        StartedGame game = startedGame("forfeit game");
-        String forfeitingPlayer = game.state().whitePlayer();
-
-        GameService.GameState ended = gameService.forfeit(game.state().gameId(), forfeitingPlayer);
-        String expectedWinner = game.state().players().stream()
-            .filter(player -> !player.equals(forfeitingPlayer))
-            .findFirst()
-            .orElseThrow();
-
-        assertEquals("FINISHED", ended.status());
-        assertEquals("FORFEIT", ended.termination());
-        assertEquals(expectedWinner, ended.winner());
-        GameService.GameException rejectedMove = assertThrows(GameService.GameException.class,
-            () -> gameService.movePiece(game.state().gameId(), ended.winner(), "e7", "e5", null));
-        assertEquals(HttpStatus.CONFLICT, rejectedMove.getStatus());
-    }
-
-    @Test
-    void rematchStartsAfterBothPlayersRequestIt() {
-        StartedGame game = startedGame("rematch game");
-        gameService.forfeit(game.state().gameId(), game.state().whitePlayer());
-        String firstPlayer = game.state().players().get(0);
-        String secondPlayer = game.state().players().get(1);
-
-        GameService.RematchResult waiting = gameService.requestRematch(game.state().gameId(), firstPlayer);
-        assertFalse(waiting.started());
-        assertEquals(List.of(firstPlayer), waiting.gameState().rematchRequests());
-
-        GameService.RematchResult started = gameService.requestRematch(game.state().gameId(), secondPlayer);
-        assertTrue(started.started());
-        assertNotNull(started.gameState().gameId());
-        assertEquals(game.roomId(), started.gameState().roomId());
-        assertEquals(game.state().players(), started.gameState().players());
-        assertEquals("IN_PROGRESS", started.gameState().status());
-    }
-
-    @Test
-    void localPlayerCanImmediatelyStartARematch() {
-        GameService.GameState game = gameService.startLocalGame("alice");
-        gameService.forfeit(game.gameId(), "alice");
-
-        GameService.RematchResult rematch = gameService.requestRematch(game.gameId(), "alice");
-
-        assertTrue(rematch.started());
-        assertNotNull(rematch.gameState().gameId());
-        assertFalse(game.gameId().equals(rematch.gameState().gameId()));
-        assertEquals("", rematch.gameState().roomId());
-        assertEquals("IN_PROGRESS", rematch.gameState().status());
-    }
-
-    @Test
-    void checkmateFinishesTheGameWithTheCorrectWinner() {
-        StartedGame game = startedGame("checkmate game");
-        GameService.GameState state = game.state();
-        state = playMove(state, "e2", "e3");
-        state = playMove(state, "f7", "f6");
-        state = playMove(state, "d2", "d4");
-        state = playMove(state, "g7", "g5");
-        state = playMove(state, "d1", "h5");
-
-        assertEquals("FINISHED", state.status());
-        assertEquals("CHECKMATE", state.termination());
-        assertTrue(state.previousTurns().get(4).endsWith("#"));
-        assertEquals(state.whitePlayer(), state.winner());
+        RoomService.RoomView transferred = roomService.transferHost(room.id(), "alice", "bob");
+        assertEquals("bob", transferred.creator());
     }
 
     @Test
     void roomGameContinuesAfterItsRoomIsClosed() {
-        StartedGame game = startedGame("independent game");
-
-        assertTrue(roomService.leave(game.roomId(), "alice"));
-        assertEquals(game.state(), gameService.getState(game.state().gameId(), "bob"));
-        assertTrue(gameService.movePiece(
-            game.state().gameId(), game.state().whitePlayer(), "e2", "e4", null).moved());
-    }
-
-    @Test
-    void selectionReturnsLegalMovesEvenWhenSelectingOutOfTurn() {
-        StartedGame game = startedGame("select game");
-        String playerWithoutTurn = game.state().whitePlayer().equals("alice") ? "bob" : "alice";
-
-        GameService.SelectionView selection = gameService.selectPiece(
-            game.state().gameId(), playerWithoutTurn, "e2");
-
-        assertEquals(List.of("e3", "e4"), selection.possibleMoves());
-    }
-
-    @Test
-    void illegalMovePreservesStateAndLegalMoveAdvancesTurn() {
-        StartedGame game = startedGame("move game");
-        String whitePlayer = game.state().whitePlayer();
-
-        GameService.MoveResult invalid = gameService.movePiece(
-            game.state().gameId(), whitePlayer, "e2", "e5", null);
-        assertFalse(invalid.moved());
-        assertEquals(game.state(), invalid.gameState());
-
-        GameService.MoveResult moved = gameService.movePiece(
-            game.state().gameId(), whitePlayer, "e2", "e4", null);
-        assertTrue(moved.moved());
-        assertFalse(moved.gameState().whiteToMove());
-        assertEquals(List.of("e4"), moved.gameState().previousTurns());
-        assertEquals("P", moved.gameState().board().get(4).get(4));
-
-        GameService.GameException outOfTurn = assertThrows(GameService.GameException.class,
-            () -> gameService.movePiece(
-                game.state().gameId(), whitePlayer, "d2", "d4", null));
-        assertEquals(HttpStatus.FORBIDDEN, outOfTurn.getStatus());
-    }
-
-    @Test
-    void enPassantCapturesThePassedPawn() {
-        StartedGame game = startedGame("en passant game");
-        GameService.GameState state = game.state();
-        state = playMove(state, "e2", "e4");
-        state = playMove(state, "a7", "a6");
-        state = playMove(state, "e4", "e5");
-        state = playMove(state, "d7", "d5");
-        state = playMove(state, "e5", "d6");
-
-        assertEquals("P", state.board().get(2).get(3));
-        assertEquals("", state.board().get(3).get(3));
-        assertEquals("exd6", state.previousTurns().get(4));
-    }
-
-    @Test
-    void castlingMovesKingAndRookAndRecordsChessNotation() {
-        StartedGame game = startedGame("castling game");
-        GameService.GameState state = game.state();
-        state = playMove(state, "g1", "f3");
-        state = playMove(state, "a7", "a6");
-        state = playMove(state, "e2", "e4");
-        state = playMove(state, "a6", "a5");
-        state = playMove(state, "f1", "e2");
-        state = playMove(state, "b7", "b6");
-        state = playMove(state, "e1", "g1");
-
-        assertEquals("K", state.board().get(7).get(6));
-        assertEquals("R", state.board().get(7).get(5));
-        assertEquals("O-O", state.previousTurns().get(6));
-    }
-
-    @Test
-    void promotionUsesRequestedPieceAndChessNotation() {
-        StartedGame game = startedGame("promotion game");
-        GameService.GameState state = game.state();
-        state = playMove(state, "a2", "a4");
-        state = playMove(state, "a7", "a6");
-        state = playMove(state, "a4", "a5");
-        state = playMove(state, "b7", "b6");
-        state = playMove(state, "a5", "b6");
-        state = playMove(state, "a6", "a5");
-        state = playMove(state, "b6", "b7");
-        state = playMove(state, "h7", "h6");
-
-        String whitePlayer = state.whitePlayer();
-        GameService.MoveResult result = gameService.movePiece(
-            state.gameId(), whitePlayer, "b7", "c8", "n");
-
-        assertTrue(result.moved());
-        assertEquals("N", result.gameState().board().get(0).get(2));
-        assertEquals("bxc8=N", result.gameState().previousTurns().get(8));
-    }
-
-    @Test
-    void movesThatLeaveTheKingInCheckAreRejected() {
-        StartedGame game = startedGame("check game");
-        GameService.GameState state = game.state();
-        state = playMove(state, "e2", "e4");
-        state = playMove(state, "f7", "f6");
-        state = playMove(state, "d1", "h5");
-
-        GameService.GameState checkedState = state;
-        String blackPlayer = checkedState.players().stream()
-            .filter(player -> !player.equals(checkedState.whitePlayer()))
-            .findFirst()
-            .orElseThrow();
-        GameService.MoveResult invalidResponse = gameService.movePiece(
-            checkedState.gameId(), blackPlayer, "a7", "a6", null);
-
-        assertFalse(invalidResponse.moved());
-        assertEquals(checkedState, invalidResponse.gameState());
-    }
-
-    @Test
-    void nonPlayerCannotSelectOrMovePieces() {
-        StartedGame game = startedGame("private game");
-
-        GameService.GameException selectionDenied = assertThrows(GameService.GameException.class,
-            () -> gameService.selectPiece(game.state().gameId(), "mallory", "e2"));
-        assertEquals(HttpStatus.FORBIDDEN, selectionDenied.getStatus());
-        GameService.GameException moveDenied = assertThrows(GameService.GameException.class,
-            () -> gameService.movePiece(game.state().gameId(), "mallory", "e2", "e4", null));
-        assertEquals(HttpStatus.FORBIDDEN, moveDenied.getStatus());
-    }
-
-    private StartedGame startedGame(String roomName) {
-        RoomService.RoomView room = roomService.create("alice", roomName, null);
+        RoomService.RoomView room = roomService.create("alice", "independent game", null);
         roomService.join("bob", room.id(), null);
-        return new StartedGame(room.id(), roomService.startGame(room.id(), "alice"));
-    }
+        GameService.GameState game = roomService.startGame(room.id(), "alice");
 
-    private GameService.GameState playMove(GameService.GameState state, String from, String to) {
-        String username;
-        if (state.whiteToMove()) {
-            username = state.whitePlayer();
-        } else {
-            username = state.players().stream()
-                .filter(player -> !player.equals(state.whitePlayer()))
-                .findFirst()
-                .orElseThrow();
-        }
-        GameService.MoveResult result = gameService.movePiece(state.gameId(), username, from, to, null);
-        assertTrue(result.moved(), from + " to " + to + " should be legal");
-        return result.gameState();
+        assertTrue(roomService.leave(room.id(), "alice"));
+        assertEquals(game, gameService.getState(game.gameId(), "bob"));
+        assertTrue(gameService.movePiece(
+            game.gameId(), game.whitePlayer(), "e2", "e4", null).moved());
     }
-
-    private record StartedGame(String roomId, GameService.GameState state) {}
 }

@@ -23,6 +23,9 @@ public class GameService {
     }
 
     synchronized GameState startRoomGame(String roomId, List<String> players) {
+        if (players.size() != 2) {
+            throw new GameException(HttpStatus.BAD_REQUEST, "A room game requires exactly two players");
+        }
         String whitePlayer = java.util.concurrent.ThreadLocalRandom.current().nextBoolean()
             ? players.get(0)
             : players.get(1);
@@ -37,6 +40,26 @@ public class GameService {
 
     public synchronized GameState getState(String gameId, String username) {
         return getAuthorizedGame(gameId, username).state();
+    }
+
+    synchronized GameState getRoomGameState(String roomId, String gameId) {
+        ChessGame game = getRoomGame(roomId, gameId);
+        return game.state();
+    }
+
+    synchronized List<RoomGameView> getRoomGames(String roomId) {
+        return games.values().stream()
+            .filter(game -> game.roomId().equals(roomId))
+            .filter(game -> game.state().status().equals("IN_PROGRESS"))
+            .map(game -> new RoomGameView(game.gameId(), game.players(), game.state().status()))
+            .toList();
+    }
+
+    synchronized boolean hasActiveRoomGame(String roomId, String username) {
+        return games.values().stream().anyMatch(game ->
+            game.roomId().equals(roomId)
+                && game.players().contains(username)
+                && game.state().status().equals("IN_PROGRESS"));
     }
 
     public synchronized SelectionView selectPiece(String gameId, String username, String square) {
@@ -110,9 +133,26 @@ public class GameService {
 
     public synchronized SseEmitter subscribe(String gameId, String username) {
         ChessGame game = getAuthorizedGame(gameId, username);
+        return subscribeToGame(gameId, game, username, false);
+    }
+
+    synchronized SseEmitter subscribeToRoomGame(String roomId, String gameId, String username) {
+        return subscribeToGame(gameId, getRoomGame(roomId, gameId), username, true);
+    }
+
+    synchronized void unsubscribeRoomMember(String roomId, String username) {
+        unsubscribeRoomSubscriptions(roomId, username);
+    }
+
+    synchronized void unsubscribeRoomMembers(String roomId) {
+        unsubscribeRoomSubscriptions(roomId, null);
+    }
+
+    private SseEmitter subscribeToGame(
+            String gameId, ChessGame game, String username, boolean roomScoped) {
         SseEmitter emitter = new SseEmitter(0L);
         subscriptions.computeIfAbsent(gameId, ignored -> new ArrayList<>())
-            .add(new Subscription(emitter));
+            .add(new Subscription(username, roomScoped, emitter));
         emitter.onCompletion(() -> unsubscribe(gameId, emitter));
         emitter.onTimeout(() -> unsubscribe(gameId, emitter));
         emitter.onError(exception -> unsubscribe(gameId, emitter));
@@ -123,6 +163,32 @@ public class GameService {
             emitter.completeWithError(exception);
         }
         return emitter;
+    }
+
+    private void unsubscribeRoomSubscriptions(String roomId, String username) {
+        for (ChessGame game : games.values()) {
+            if (!game.roomId().equals(roomId)) {
+                continue;
+            }
+            List<Subscription> gameSubscriptions = subscriptions.get(game.gameId());
+            if (gameSubscriptions == null) {
+                continue;
+            }
+            for (Subscription subscription : List.copyOf(gameSubscriptions)) {
+                if (subscription.roomScoped
+                        && (username == null || subscription.username.equals(username))) {
+                    subscription.emitter.complete();
+                }
+            }
+        }
+    }
+
+    private ChessGame getRoomGame(String roomId, String gameId) {
+        ChessGame game = games.get(gameId);
+        if (game == null || !game.roomId().equals(roomId)) {
+            throw new GameException(HttpStatus.NOT_FOUND, "Room game not found");
+        }
+        return game;
     }
 
     private synchronized void unsubscribe(String gameId, SseEmitter emitter) {
@@ -166,6 +232,8 @@ public class GameService {
 
     public record RematchResult(boolean started, GameState gameState) {}
 
+    public record RoomGameView(String gameId, List<String> players, String status) {}
+
     public record GameState(
             String gameId,
             String roomId,
@@ -194,5 +262,5 @@ public class GameService {
         }
     }
 
-    private record Subscription(SseEmitter emitter) {}
+    private record Subscription(String username, boolean roomScoped, SseEmitter emitter) {}
 }

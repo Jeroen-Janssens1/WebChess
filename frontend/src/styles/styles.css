@@ -134,6 +134,20 @@ h1 em { color: var(--sand); font-weight: 500; }
 .lobby-actions .button + .button { margin-top: 8px; }
 .waiting-copy { color: #9b938b; font-size: 11px; text-align: center; padding: 8px; }
 .inline-notice { color: var(--sand); font-size: 11px; grid-column: 2; }
+.lobby-section { margin-top: 30px; border: 1px solid var(--line); background: rgba(255, 255, 255, .025); }
+.lobby-section-head { display: flex; justify-content: space-between; padding: 16px 18px 12px; border-bottom: 1px solid var(--line); }
+.lobby-section-head .eyebrow { margin: 0; font-size: 9px; }
+.lobby-section-head > span:last-child { color: #8f877f; font: 8px var(--mono); }
+.lobby-section > .waiting-copy { margin: 0; }
+.room-game-list { padding: 0 18px; }
+.room-game-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 60px; padding: 9px 0; border-bottom: 1px solid rgba(247, 247, 247, .07); }
+.room-game-row:last-child { border-bottom: 0; }
+.room-game-row > div:first-child strong, .room-game-row > div:first-child span { display: block; }
+.room-game-row > div:first-child strong { color: #e8e2dc; font-size: 11px; font-weight: 500; }
+.room-game-row > div:first-child span { color: #938b83; font-size: 9px; margin-top: 5px; }
+.room-row-actions { display: flex; align-items: center; gap: 5px; }
+.room-row-actions .button { padding: 0 8px; }
+.player-row .room-row-actions { margin-left: auto; }
 
 .game-frame { width: min(1200px, calc(100% - 44px)); }
 .game-topbar { height: 72px; }

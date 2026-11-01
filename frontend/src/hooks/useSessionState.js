@@ -50,10 +50,18 @@ function useSessionState({
 
       if (saved?.gameId) {
         let savedGame;
+        let gamesPath = '/api/games';
         try {
-          savedGame = await api(`/api/games/${encodeURIComponent(saved.gameId)}`);
+          savedGame = await api(`${gamesPath}/${encodeURIComponent(saved.gameId)}`);
         } catch (error) {
-          if (error.status !== 404) {
+          if (error.status === 403 && saved.roomId) {
+            gamesPath = `/api/rooms/${encodeURIComponent(saved.roomId)}/games`;
+            try {
+              savedGame = await api(`${gamesPath}/${encodeURIComponent(saved.gameId)}`);
+            } catch (roomError) {
+              if (roomError.status !== 404) throw roomError;
+            }
+          } else if (error.status !== 404) {
             if (active) {
               preserveSavedSession.current = true;
               setRoom(null);
@@ -67,7 +75,7 @@ function useSessionState({
         if (savedGame) {
           let currentGame;
           try {
-            currentGame = await resolveLatestGame(savedGame);
+            currentGame = await resolveLatestGame(savedGame, gamesPath);
           } catch {
             if (active) {
               preserveSavedSession.current = true;

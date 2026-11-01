@@ -39,7 +39,7 @@ export async function api(url, options = {}) {
   return payload;
 }
 
-export async function resolveLatestGame(game) {
+export async function resolveLatestGame(game, gamesPath = '/api/games') {
   let latest = game;
   const seenGameIds = new Set(game.gameId ? [game.gameId] : []);
   while (latest.rematchGameId) {
@@ -48,7 +48,7 @@ export async function resolveLatestGame(game) {
       throw new Error(`Rematch chain contains a cycle at game ${nextGameId}`);
     }
     seenGameIds.add(nextGameId);
-    latest = await api(`/api/games/${encodeURIComponent(nextGameId)}`);
+    latest = await api(`${gamesPath}/${encodeURIComponent(nextGameId)}`);
   }
   return latest;
 }

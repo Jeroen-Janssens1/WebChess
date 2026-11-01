@@ -6,7 +6,7 @@ function RoomSearch({ rooms, busy, onBack, onJoin }) {
   const [hideProtected, setHideProtected] = useState(false);
   const visibleRooms = rooms.filter((room) => {
     const matchesName = room.name?.toLowerCase().includes(query.toLowerCase());
-    const isFull = room.users?.length >= 2 || room.gameId;
+    const isFull = room.users?.length >= 20;
     return matchesName && !(hideFull && isFull) && !(hideProtected && room.passwordProtected);
   });
   return (
@@ -27,12 +27,12 @@ function RoomSearch({ rooms, busy, onBack, onJoin }) {
         <div className="room-list">
           {!visibleRooms.length && <div className="empty-state"><span>♙</span><strong>No rooms to show</strong><p>Try another search or check back in a moment.</p></div>}
           {visibleRooms.map((item) => {
-            const full = item.users?.length >= 2 || item.gameId;
+            const full = item.users?.length >= 20;
             return (
               <article className="room-row" key={item.id}>
                 <div className="room-symbol">♟</div>
                 <div className="room-meta"><strong>{item.name}</strong><span>Hosted by {item.creator}</span></div>
-                <span className="room-count">{item.users?.length || 0} / 2 players</span>
+                <span className="room-count">{item.users?.length || 0} / 20 players</span>
                 {item.passwordProtected && <span className="lock-label" title="Password required">⌑</span>}
                 <button className="button button-small button-outline" disabled={full || busy} onClick={() => onJoin(item)}>{full ? 'Full' : 'Join'}</button>
               </article>
