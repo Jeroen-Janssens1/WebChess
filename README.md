@@ -195,16 +195,8 @@ The main React app in `frontend/src/app.jsx` coordinates the current screen, use
 \-- README.md
 ```
 
-## Planned features
+## Feature roadmap
 
-The following features are planned and are not part of the current implementation:
-
-- [ ] **Expand the room system**
-  - Increase room capacity to up to 20 players.
-  - Allow the current host to transfer host privileges to another room member.
-  - Allow any room member to request a game with any other member.
-  - Track multiple active games within a room.
-  - Allow room members to spectate active games in that room.
 - [ ] **Add player game history**
   - Store each player's 100 most recent games.
   - Save games as a list of turn notations and show the color the player used.
