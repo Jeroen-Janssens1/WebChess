@@ -1,6 +1,6 @@
 # WebChess
 
-WebChess is a browser-based chess application. Players can create accounts, play a local hot-seat game, or play against another authenticated user in a two-person room. The frontend communicates with a Spring Boot API; MySQL stores user accounts, while active rooms and games are held in server memory.
+WebChess is a browser-based chess application. Players can create accounts, play a local hot-seat game, or join rooms of up to 20 members to request games, play, or spectate other room games. The frontend communicates with a Spring Boot API; MySQL stores user accounts, while active rooms and games are held in server memory.
 
 ## Contents
 
@@ -110,24 +110,31 @@ Passwords are stored using BCrypt hashing.
 
 ### Rooms
 
-Rooms have a unique name, a creator/host, and a maximum of two members. A room can optionally be password-protected; room passwords are stored as BCrypt hashes. The public room listing indicates whether a room is password-protected but does not expose its password.
+Rooms have a unique name, a host, and a maximum of 20 members. A room can optionally be password-protected; room passwords are stored as BCrypt hashes. The public room listing indicates whether a room is password-protected but does not expose its password. A member can join while room games are in progress. The current host can transfer host privileges to another member; if the host leaves without transferring them, the room closes.
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| `GET` | `/api/rooms` | List active rooms. Returns an array of room views. |
+| `GET` | `/api/rooms` | List active rooms. Returns public room summaries, without games or game requests. |
 | `POST` | `/api/rooms` | Create a room. Body: `{"name":"...","password":"..."}`; password may be omitted or empty. Returns `201` and the new room view. |
 | `POST` | `/api/rooms/join` | Join by room ID or exact room name. Body: `{"roomIdOrName":"...","password":"..."}`. |
-| `POST` | `/api/rooms/{roomId}/games` | Host starts a game after a second member has joined. Returns `201` and the initial game state. |
-| `DELETE` | `/api/rooms/{roomId}/members/me` | Leave the room. If the creator leaves, the room closes; otherwise the remaining member is notified. |
+| `GET` | `/api/rooms/{roomId}` | Get the full room view, including its active games and pending game requests. Caller must be a room member. |
+| `POST` | `/api/rooms/{roomId}/host` | Transfer host privileges. Body: `{"username":"..."}`. Only the current host can transfer to another room member. |
+| `POST` | `/api/rooms/{roomId}/games` | Host starts a game with the first two room members, if both are not already playing active games. Returns `201` and the initial game state. This endpoint is available to API clients; room members can also start games by accepting requests. |
+| `POST` | `/api/rooms/{roomId}/games/requests` | Request a game with another room member. Body: `{"opponent":"..."}`. A member already playing an active game cannot send a request. |
+| `POST` | `/api/rooms/{roomId}/games/requests/{requestId}/accept` | Accept an incoming request. Only its invited member can accept; both players must be available. Returns `201` and the initial game state. |
+| `POST` | `/api/rooms/{roomId}/games/requests/{requestId}/decline` | Decline an incoming request. Only its invited member can decline. |
+| `GET` | `/api/rooms/{roomId}/games/{gameId}` | Get a game in this room. Caller must be a room member; this allows spectators to read the game state. |
+| `GET` | `/api/rooms/{roomId}/games/{gameId}/events` | Subscribe to a room game using SSE. Any room member can spectate; subscription ends if the member leaves the room. |
+| `DELETE` | `/api/rooms/{roomId}/members/me` | Leave the room. If the current host leaves, the room closes and room members are notified; otherwise only the departing member is removed. |
 | `GET` | `/api/rooms/{roomId}/events` | Subscribe to room events using Server-Sent Events (SSE). The caller must be a room member. |
 
-A room view contains `id`, `name`, `creator`, `users`, `passwordProtected`, and `gameId` (null until a room game starts). The room listing indicates whether a room is password-protected but does not expose its password. Typical room errors include `400` for missing names/IDs, `403` for an incorrect password or unauthorized host action, `404` for an unknown room, and `409` for a duplicate name, full room, or invalid attempt to start a game.
+A full room view contains `id`, `name`, `creator` (the current host), `users`, `passwordProtected`, `gameId` (the most recently launched room-started or request-accepted game, or null), `games`, and `gameRequests`. Use `games` as the authoritative list of open games; it contains only games with status `IN_PROGRESS`, including rematches. Finished games remain available to their players through the game API but are omitted from the room's open-games list. Game requests contain an ID, requester username, and invited opponent username. A request disappears when declined, accepted, or when either member leaves. The public room listing indicates whether a room is password-protected but does not expose its password, games, or requests. Typical room errors include `400` for invalid room or member details, `403` for an incorrect password or unauthorized action, `404` for an unknown room or request, and `409` for a duplicate room name, full room, unavailable player, or invalid attempt to start a game.
 
-The room event stream first sends a `room` event containing the current room view. Membership and game-start changes send `room_updated`; a creator leaving sends `room_closed` and closes the stream. Room event streams report room lifecycle only; moves and other game activity use the game stream.
+The room event stream first sends a `room` event containing the current room view. Membership, host, request, game-start, and accepted-rematch changes send `room_updated`, so room members see changes to the open-games list without reloading. The current host leaving sends `room_closed` and closes the room event streams. Moves and other game activity use the game stream.
 
 ### Games and chess rules
 
-Games can be started by a room host or as a local hot-seat game. In a room game, one of the two players is randomly assigned White. In a local game, the same authenticated player controls both colors. Each game has its own ID and continues independently of its room, including if that room is later closed.
+Games can be started through a room game request or by a room host using the room start endpoint, as well as as local hot-seat games. Every room game has exactly two players, with White assigned randomly. A room member cannot start or accept a game while already playing another in-progress room game; after that game ends they may play again. In a local game, the same authenticated player controls both colors. Each game has its own ID and continues independently of its room, including if that room is later closed.
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
@@ -140,6 +147,8 @@ Games can be started by a room host or as a local hot-seat game. In a room game,
 | `GET` | `/api/games/{gameId}/events` | Subscribe to game events using SSE. |
 
 Only players in a game can retrieve its state, select pieces, move, or subscribe. In room games, only the player assigned to the color whose turn it is can submit a move. A local game's single player can submit moves for either color. Selection reports legal moves for the selected piece in the current position; it does not enforce the submitting player's turn, meaning a player can check their currently legal moves even if it isn't currently their turn.
+
+Room members who are not players can spectate using `GET /api/rooms/{roomId}/games/{gameId}` and the corresponding room-scoped SSE endpoint listed above. Room members cannot select or move pieces through spectator access. The frontend returns spectators to the room automatically when the game ends, and provides a button to leave the spectator view at any time. Players use the player-authorized `/api/games/{gameId}` routes.
 
 The game engine validates piece movement, captures, king safety, and check. It implements castling (including rights and attacked-square restrictions), en passant, and pawn promotion to queen, rook, bishop, or knight. Promotion defaults to a queen when omitted. Kings cannot be captured. Checkmate and stalemate are detected automatically. The implemented automatic endings are checkmate, stalemate, and forfeit; repetition, the fifty-move rule, and insufficient-material draws are not implemented.
 
@@ -162,7 +171,7 @@ A game state includes:
 | `rematchRequests` | Players who have requested a rematch. |
 | `rematchGameId` | ID of the rematch once started; otherwise null. |
 
-The game event stream immediately sends the current state as `game_started`. It then emits `game_updated` after a legal move, `game_ended` after a forfeit, and `rematch_requested` or `rematch_started` during rematch handling. A room game requires both players to request a rematch; a local game's rematch starts immediately. A rematch is a new game with a new ID.
+The game event stream immediately sends the current state as `game_started`. It then emits `game_updated` after a legal move, `game_ended` after a forfeit, and `rematch_requested` or `rematch_started` during rematch handling. A room game requires both players to request a rematch; a local game's rematch starts immediately. A rematch is a new game with a new ID. Once a room rematch starts, the room emits `room_updated` so the new active game appears in the open-games list.
 
 ## Frontend
 
