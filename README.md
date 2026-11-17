@@ -205,12 +205,6 @@ The main React app in `frontend/src/app.jsx` coordinates the current screen, use
 ```
 
 ## Feature roadmap
-
-- [ ] **Add player game history**
-  - Store each player's 100 most recent games.
-  - Save games as a list of turn notations and show the color the player used.
-  - Let players browse their history and select a game to review.
-  - Provide controls to step forward and backward through the recorded turns.
 - [ ] **Prepare the architecture for multiple backend instances**
   - Add a load balancer and support multiple application server instances.
   - Move shared runtime state, including games and rooms, into Redis.
